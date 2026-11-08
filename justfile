@@ -17,10 +17,10 @@ no-fused:
     no-fused
 
 test *args:
-    go test -shuffle=on ./... {{args}}
+    go test ${LYS_TEST_ARGS--shuffle=on} ./... {{args}}
 
 race:
-    CGO_ENABLED=1 go test -race -shuffle=on ./...
+    CGO_ENABLED=1 go test -race ${LYS_TEST_ARGS--shuffle=on} ./...
 
 build:
     go build -o /dev/null ./...
