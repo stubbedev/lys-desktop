@@ -1,0 +1,3 @@
+button.sidebar-reset-all:hover {
+  color: var(--status-error);
+}

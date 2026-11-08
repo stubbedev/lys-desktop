@@ -1,0 +1,10 @@
+.bluetooth-device.connected .media {
+  background: var(--accent-subtle);
+}
+.bluetooth-device.connected image.bluetooth-icon {
+  color: var(--accent);
+}
+
+button.bluetooth-forget:hover {
+  color: var(--status-error);
+}

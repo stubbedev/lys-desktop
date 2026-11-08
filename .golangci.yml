@@ -1,0 +1,95 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - copyloopvar
+    - errorlint
+    - forbidigo
+    - gosec
+    - intrange
+    - misspell
+    - modernize
+    - nolintlint
+    - perfsprint
+    - revive
+    - unconvert
+    - unparam
+    - usestdlibvars
+    - whitespace
+  settings:
+    forbidigo:
+      forbid:
+        - pattern: ^math\.(Sin|Cos|Sincos|Tan|Atan|Atan2|Asin|Acos|Exp|Exp2|Log|Log2|Log10|Pow|Cbrt|Hypot|Erf|Erfc)$
+          msg: its result depends on the architecture; use lys-lib's third_party/gomath
+    errcheck:
+      check-type-assertions: true
+      exclude-functions:
+        - (*os.File).Close
+        - (io.Closer).Close
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+    misspell:
+      ignore-rules:
+        # The freedesktop thumbnail spec's word (the `thumbnailers`
+        # directory, `.thumbnailer` descriptors).
+        - thumbnailers
+    perfsprint:
+      strconcat: true
+      sprintf1: true
+    revive:
+      rules:
+        # Enforced since the API-consistency pass (#52): every
+        # exported symbol carries a doc comment starting with its
+        # name, so godoc and the lys-shell-facing API stay complete.
+        - name: exported
+  exclusions:
+    # Upstream code carried close to verbatim (LYS_SHELL-PATCHES.md).
+    paths:
+      - third_party/fourier/
+    generated: lax
+    rules:
+      - path: _test\.go
+        linters:
+          - forbidigo
+          - errcheck
+          - gosec
+          - unparam
+      # Two's-complement reinterpretation of a decoded or encoded wire
+      # word of the same width (s16 PCM, inotify wd, IPP integers, evdev
+      # values, PulseAudio 'r' fields): the bits are the value.
+      - path: ^(fswatch|service/pulse/native)/
+        linters:
+          - gosec
+        text: "G115: integer overflow conversion (uint16 -> int16|uint32 -> int32|uint64 -> int64|int64 -> uint64)$"
+      # The standard library's JPEG decoder narrows bit-stream words and
+      # fixed-point DCT values whose range its arithmetic bounds.
+      - path: ^third_party/jpeg/
+        linters:
+          - gosec
+        text: "G115: integer overflow conversion"
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+formatters:
+  enable:
+    - gofumpt
+    - gci
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(github.com/stubbedev/lys-desktop)
+  exclusions:
+    # Upstream code carried close to verbatim (LYS_SHELL-PATCHES.md).
+    paths:
+      - third_party/fourier/
+    generated: lax
