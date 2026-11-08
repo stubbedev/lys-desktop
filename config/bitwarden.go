@@ -1,6 +1,6 @@
 package config
 
-import "github.com/stubbedev/lys-secrets/vault/vaultserver"
+import "github.com/stubbedev/lys-lib/vaultserver"
 
 // BitwardenServer is where the account lives, resolved at load so a
 // mistyped URL is a diagnostic for its field: `bitwarden.com`,
