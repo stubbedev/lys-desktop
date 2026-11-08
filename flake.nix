@@ -18,7 +18,6 @@
       url = "github:stubbedev/lys-wm";
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.flake-parts.follows = "flake-parts";
-      inputs.lys-shell.follows = "";
     };
   };
 

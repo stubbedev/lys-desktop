@@ -4,7 +4,7 @@ go 1.27.3
 
 require (
 	github.com/stubbedev/lys-lib v0.3.15-0.20261108181347-7a8c33f6efd8
-	github.com/stubbedev/lys-ui v0.2.19-0.20261108181135-6456a3da49fd
+	github.com/stubbedev/lys-ui v0.2.19-0.20261108181740-e2ea7b956a2a
 	github.com/stubbedev/memory-go v0.5.0
 	go.yaml.in/yaml/v3 v3.0.6
 	golang.org/x/image v0.47.0
