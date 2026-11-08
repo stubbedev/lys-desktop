@@ -31,7 +31,7 @@ jobs:
       - name: Allow user namespaces
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Vet, lint, test, build
-        run: nix develop --accept-flake-config -c just vet lint no-fused test build
+        run: nix develop --accept-flake-config -c just plain
 
   race:
     strategy:

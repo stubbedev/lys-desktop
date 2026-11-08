@@ -4,7 +4,10 @@ default:
     @just --list
 
 # Every gate CI runs: vet, lint, no-fused, test, race, build.
-check: vet lint no-fused test race build
+check: plain race
+
+# Every gate but the race detector, which CI runs as its own job.
+plain: vet lint no-fused test build
 
 vet:
     go vet ./...
