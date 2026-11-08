@@ -31,6 +31,7 @@
         ++ fonts;
 
       LD_LIBRARY_PATH = lib.makeLibraryPath (lib.unique (gpuDrivers.libraries ++ [pkgs.libva pkgs.vulkan-loader pkgs.pipewire pkgs.libei]));
+      XDG_DESKTOP_PORTAL = "${pkgs.xdg-desktop-portal}/libexec/xdg-desktop-portal";
       XKB_CONFIG_ROOT = "${pkgs.xkeyboard-config}/share/X11/xkb";
       XLOCALEDIR = "${pkgs.libX11}/share/X11/locale";
       CGO_ENABLED = "0";

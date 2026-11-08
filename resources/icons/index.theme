@@ -1,0 +1,10 @@
+[Icon Theme]
+Name=lys-shell Icons
+Comment=Icons installed by lys-shell
+Directories=hicolor/scalable/actions
+
+[hicolor/scalable/actions]
+Size=48
+MinSize=16
+MaxSize=512
+Type=Scalable
