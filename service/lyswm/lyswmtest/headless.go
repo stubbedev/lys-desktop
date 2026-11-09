@@ -14,6 +14,7 @@ import (
 	"github.com/stubbedev/lys-lib/wmipc"
 
 	"github.com/stubbedev/lys-desktop/service/lyswm"
+	"github.com/stubbedev/lys-desktop/testhome"
 )
 
 const headlessConfig = "xwayland:\n  enabled: false\n"
@@ -44,7 +45,7 @@ func Headless(t *testing.T) {
 	})
 	cmd := exec.Command("lys-wm", "-backend", "headless", "-renderer", "soft", "-config", config) //nolint:gosec // lys-wm from PATH, for a test
 	cmd.Stdout, cmd.Stderr = out, out
-	cmd.Env = append(os.Environ(), "XDG_RUNTIME_DIR="+dir, "WAYLAND_DISPLAY=", "DISPLAY=", wmipc.SocketEnv+"=", "DBUS_SESSION_BUS_ADDRESS=unix:path="+filepath.Join(dir, "no-bus"))
+	cmd.Env = append(testhome.WithoutSession(os.Environ()), "XDG_RUNTIME_DIR="+dir, "DBUS_SESSION_BUS_ADDRESS=unix:path="+filepath.Join(dir, "no-bus"))
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}

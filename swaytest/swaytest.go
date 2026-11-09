@@ -14,6 +14,8 @@ import (
 
 	"github.com/stubbedev/lys-lib/dbustest"
 	"github.com/stubbedev/lys-lib/sockdir"
+
+	"github.com/stubbedev/lys-desktop/testhome"
 )
 
 // Start runs a private headless sway rendering with pixman, env
@@ -39,10 +41,8 @@ func Start(t *testing.T, env ...string) *os.Process {
 	defer log.Close()
 	cmd := exec.Command("sway", "-c", config) //nolint:gosec // sway from PATH, for a test
 	cmd.Stdout, cmd.Stderr = log, log
-	cmd.Env = append(os.Environ(), "XDG_RUNTIME_DIR="+dir, "DBUS_SESSION_BUS_ADDRESS="+dbustest.Start(t).Address, "WLR_BACKENDS=headless", "WLR_RENDERER=pixman", "WLR_LIBINPUT_NO_DEVICES=1")
-	cmd.Env = append(slices.DeleteFunc(cmd.Env, func(kv string) bool {
-		return strings.HasPrefix(kv, "WAYLAND_DISPLAY=") || strings.HasPrefix(kv, "SWAYSOCK=")
-	}), env...)
+	cmd.Env = append(testhome.WithoutSession(os.Environ()), "XDG_RUNTIME_DIR="+dir, "DBUS_SESSION_BUS_ADDRESS="+dbustest.Start(t).Address, "WLR_BACKENDS=headless", "WLR_RENDERER=pixman", "WLR_LIBINPUT_NO_DEVICES=1")
+	cmd.Env = append(cmd.Env, env...)
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
