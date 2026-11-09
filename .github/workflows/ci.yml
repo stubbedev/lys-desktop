@@ -25,7 +25,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: stubbedev/lys-ci/.github/actions/nix-setup@bf3da3ebd3253f33f2f7696b4284986772da635f
+      - uses: stubbedev/lys-ci/.github/actions/nix-setup@8fbd58c3b857759adbd18f216827e71fc9cd0615
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Allow user namespaces
@@ -43,7 +43,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: stubbedev/lys-ci/.github/actions/nix-setup@bf3da3ebd3253f33f2f7696b4284986772da635f
+      - uses: stubbedev/lys-ci/.github/actions/nix-setup@8fbd58c3b857759adbd18f216827e71fc9cd0615
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Allow user namespaces
