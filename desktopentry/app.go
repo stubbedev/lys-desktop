@@ -439,11 +439,13 @@ func (a App) expandExec(execLine string, target *launchTarget) ([]string, error)
 
 // LaunchContext is what an app is opened with beside its file: the
 // XDG activation token that lets it raise its window ("" for none), and
-// the terminal emulator a Terminal=true entry runs in, as
-// `<Terminal> -e <command>` ("" refuses such an entry).
+// Terminal, which names the terminal emulator a Terminal=true entry runs
+// in, as `<terminal> -e <command>`. It is asked only when such an entry is
+// about to run, and its error is why the entry does not open; nil refuses
+// such an entry.
 type LaunchContext struct {
 	ActivationToken string
-	Terminal        string
+	Terminal        func() (string, error)
 }
 
 // Launch starts the application with no files (g_app_info_launch). A
@@ -485,10 +487,14 @@ func (a App) Open(uri string, ctx LaunchContext) error {
 		return err
 	}
 	if a.Terminal() {
-		if ctx.Terminal == "" {
+		if ctx.Terminal == nil {
 			return fmt.Errorf("desktopentry: %s runs in a terminal and none was given to open %s in", a.ID, uri)
 		}
-		argv = append([]string{ctx.Terminal, "-e"}, argv...)
+		terminal, err := ctx.Terminal()
+		if err != nil {
+			return fmt.Errorf("desktopentry: %s needs a terminal to open %s in: %w", a.ID, uri, err)
+		}
+		argv = append([]string{terminal, "-e"}, argv...)
 	}
 	return a.run(argv, ctx.ActivationToken)
 }

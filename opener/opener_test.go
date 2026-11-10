@@ -142,7 +142,11 @@ func TestOpenLaunchesTheHandlerWithTheTarget(t *testing.T) {
 	script := filepath.Join(f.Root, "run.py")
 	f.Write(t, "run.py", "print(1)\n")
 
-	if err := Open("https://example.com/?q=a b", desktopentry.LaunchContext{ActivationToken: "tok"}); err != nil {
+	unasked := func() (string, error) {
+		t.Error("a handler that runs in no terminal asked for one")
+		return "term", nil
+	}
+	if err := Open("https://example.com/?q=a b", desktopentry.LaunchContext{ActivationToken: "tok", Terminal: unasked}); err != nil {
 		t.Fatal(err)
 	}
 	if got := f.ran(t, "otherbrowser"); got != "--new-tab=https://example.com/?q=a b|tok" {
@@ -169,7 +173,15 @@ func TestOpenRunsTerminalHandlersInTheGivenTerminal(t *testing.T) {
 	if err := Open(img, desktopentry.LaunchContext{}); err == nil || !strings.Contains(err.Error(), "terminal") || !strings.Contains(err.Error(), img) {
 		t.Errorf("a terminal handler with no terminal = %v, want an error naming the terminal and the file", err)
 	}
-	if err := Open(img, desktopentry.LaunchContext{Terminal: "term"}); err != nil {
+	none := errors.New("no terminal installed")
+	err := Open(img, desktopentry.LaunchContext{Terminal: func() (string, error) { return "", none }})
+	if !errors.Is(err, none) || !strings.Contains(err.Error(), "viewer.desktop") || !strings.Contains(err.Error(), img) {
+		t.Errorf("a terminal handler whose terminal is not found = %v, want the reason wrapped, naming the app and the file", err)
+	}
+	if f.tools["viewer"].HasRun() || f.tools["term"].HasRun() {
+		t.Error("a terminal handler ran without a terminal")
+	}
+	if err := Open(img, desktopentry.LaunchContext{Terminal: func() (string, error) { return "term", nil }}); err != nil {
 		t.Fatal(err)
 	}
 	if got := f.ran(t, "term"); got != "-e viewer "+img+"|" {
