@@ -124,7 +124,7 @@ settings-launcher-drun-show-actions = Show Actions
     .description = Expose desktop-file actions as extra rows
 
 settings-launcher-drun-url-launcher = URL Launcher
-    .description = Command opening Type=Link desktop entries
+    .description = Command opening Type=Link desktop entries (empty = the built-in opener)
 
 settings-launcher-run-run-command = Run Command
     .description = Plain accept template ({"{cmd}"})
@@ -172,7 +172,7 @@ settings-launcher-filebrowser-show-hidden = Show Hidden
     .description = Show hidden files
 
 settings-launcher-filebrowser-command = Open Command
-    .description = Command opening the picked file (empty = xdg-open)
+    .description = Command opening the picked file (empty = the built-in opener)
 
 settings-launcher-combi-modes = Combined Modes
     .description = Modes merged into the combined list

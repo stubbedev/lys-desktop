@@ -94,10 +94,10 @@ func (m MimeApps) associations(mimeType string) associations {
 	return as
 }
 
-// Default is the app mimeType opens with, as xdg-mime query default
-// answers: the first installed default the lists name, in their order
-// and not removed by a list above, else the first installed app that
-// declares the type.
+// Default is the app mimeType opens with, by the mime-apps spec: the
+// first installed default the lists name, in their order and not removed
+// by a list above, else the first installed added association, else the
+// first installed app that declares the type and no list removed.
 func Default(dirs, lists []string, mimeType string) (App, bool) {
 	return ReadMimeApps(lists).Default(AllApps(dirs), mimeType)
 }
@@ -106,7 +106,7 @@ func Default(dirs, lists []string, mimeType string) (App, bool) {
 // already read, for a caller resolving many types from one scan.
 func (m MimeApps) Default(all []App, mimeType string) (App, bool) {
 	as := m.associations(mimeType)
-	for _, id := range as.defaults {
+	for _, id := range slices.Concat(as.defaults, as.added) {
 		if i := slices.IndexFunc(all, func(a App) bool { return a.ID == id }); i >= 0 {
 			return all[i], true
 		}

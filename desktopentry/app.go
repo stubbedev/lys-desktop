@@ -14,6 +14,7 @@ import (
 
 	dbus "github.com/stubbedev/lys-lib/third_party/godbus"
 
+	"github.com/stubbedev/lys-desktop/fileuri"
 	"github.com/stubbedev/lys-desktop/shlex"
 	"github.com/stubbedev/lys-desktop/spawn"
 )
@@ -347,12 +348,33 @@ func (a App) dbusActivatable() bool { return a.file.Bool(DesktopGroup, "DBusActi
 // files: %f %F %u %U vanish, %i is --icon <Icon>, %c the name, %k the
 // entry's path, %% a percent; the deprecated codes vanish. A token that
 // was only a vanishing code is dropped.
-func (a App) ExpandExec(execLine string) ([]string, error) {
+func (a App) ExpandExec(execLine string) ([]string, error) { return a.expandExec(execLine, nil) }
+
+// launchTarget is the one file or URI an app is opened on.
+type launchTarget struct {
+	uri  string
+	path string
+}
+
+func newLaunchTarget(uri string) launchTarget {
+	path, _ := fileuri.Path(uri)
+	return launchTarget{uri: uri, path: path}
+}
+
+func (t launchTarget) local(a App) (string, error) {
+	if t.path == "" {
+		return "", fmt.Errorf("desktopentry: %s opens only local files, not %s", a.ID, t.uri)
+	}
+	return t.path, nil
+}
+
+func (a App) expandExec(execLine string, target *launchTarget) ([]string, error) {
 	words, ok := shlex.Split(execLine)
 	if !ok || len(words) == 0 {
 		return nil, fmt.Errorf("desktopentry: %s: unparseable Exec %q", a.ID, execLine)
 	}
 	var argv []string
+	tookTarget := false
 	for _, w := range words {
 		if w == "%i" {
 			if icon := a.Icon(); icon != "" {
@@ -379,9 +401,22 @@ func (a App) ExpandExec(execLine string) ([]string, error) {
 			case 'k':
 				b.WriteString(a.Path)
 				codeOnly = false
-			case 'f', 'F', 'u', 'U', 'd', 'D', 'n', 'N', 'v', 'm', 'i':
+			case 'u', 'U':
+				if target != nil {
+					b.WriteString(target.uri)
+					codeOnly, tookTarget = false, true
+				}
+			case 'f', 'F':
+				if target != nil {
+					path, err := target.local(a)
+					if err != nil {
+						return nil, err
+					}
+					b.WriteString(path)
+					codeOnly, tookTarget = false, true
+				}
+			case 'd', 'D', 'n', 'N', 'v', 'm', 'i':
 			default:
-				// An unknown code is passed through.
 				b.WriteByte('%')
 				b.WriteByte(w[i])
 				codeOnly = false
@@ -392,7 +427,23 @@ func (a App) ExpandExec(execLine string) ([]string, error) {
 		}
 		argv = append(argv, b.String())
 	}
+	if target != nil && !tookTarget {
+		path, err := target.local(a)
+		if err != nil {
+			return nil, err
+		}
+		argv = append(argv, path)
+	}
 	return argv, nil
+}
+
+// LaunchContext is what an app is opened with beside its file: the
+// XDG activation token that lets it raise its window ("" for none), and
+// the terminal emulator a Terminal=true entry runs in, as
+// `<Terminal> -e <command>` ("" refuses such an entry).
+type LaunchContext struct {
+	ActivationToken string
+	Terminal        string
 }
 
 // Launch starts the application with no files (g_app_info_launch). A
@@ -401,7 +452,7 @@ func (a App) ExpandExec(execLine string) ([]string, error) {
 // is not activatable, its Exec runs detached in its Path.
 func (a App) Launch() error {
 	if a.dbusActivatable() {
-		err := a.activate("Activate", nil)
+		err := a.activate("Activate", nil, "")
 		if err == nil {
 			return nil
 		}
@@ -410,6 +461,36 @@ func (a App) Launch() error {
 		}
 	}
 	return a.spawn(a.Exec())
+}
+
+// Open starts the application on one file or URI
+// (g_app_info_launch_uris), a local file passed as its file:// URI. A
+// DBusActivatable entry is sent org.freedesktop.Application.Open; if that
+// fails, or the entry is not activatable, its Exec runs detached with the
+// target in place of its file field code, appended as %f would be when it
+// has none, inside ctx's terminal for a Terminal=true entry.
+func (a App) Open(uri string, ctx LaunchContext) error {
+	if a.dbusActivatable() {
+		err := a.activate("Open", []any{[]string{uri}}, ctx.ActivationToken)
+		if err == nil {
+			return nil
+		}
+		if a.Exec() == "" {
+			return err
+		}
+	}
+	target := newLaunchTarget(uri)
+	argv, err := a.expandExec(a.Exec(), &target)
+	if err != nil {
+		return err
+	}
+	if a.Terminal() {
+		if ctx.Terminal == "" {
+			return fmt.Errorf("desktopentry: %s runs in a terminal and none was given to open %s in", a.ID, uri)
+		}
+		argv = append([]string{ctx.Terminal, "-e"}, argv...)
+	}
+	return a.run(argv, ctx.ActivationToken)
 }
 
 // LaunchAction runs a desktop action (g_desktop_app_info_launch_action):
@@ -421,7 +502,7 @@ func (a App) LaunchAction(action string) error {
 		return fmt.Errorf("desktopentry: %s has no action %q", a.ID, action)
 	}
 	if a.dbusActivatable() {
-		if err := a.activate("ActivateAction", []any{action, []dbus.Variant{}}); err == nil {
+		if err := a.activate("ActivateAction", []any{action, []dbus.Variant{}}, ""); err == nil {
 			return nil
 		}
 	}
@@ -429,13 +510,18 @@ func (a App) LaunchAction(action string) error {
 	return a.spawn(execLine)
 }
 
-// spawn runs an expanded Exec line detached, in the entry's Path, with
-// gio's GIO_LAUNCHED_DESKTOP_FILE markers.
+// spawn runs an Exec line with no files.
 func (a App) spawn(execLine string) error {
 	argv, err := a.ExpandExec(execLine)
 	if err != nil {
 		return err
 	}
+	return a.run(argv, "")
+}
+
+// run starts argv detached, in the entry's Path, with gio's
+// GIO_LAUNCHED_DESKTOP_FILE marker and the activation token, if any.
+func (a App) run(argv []string, activationToken string) error {
 	if len(argv) == 0 {
 		return fmt.Errorf("desktopentry: %s: empty Exec", a.ID)
 	}
@@ -444,6 +530,9 @@ func (a App) spawn(execLine string) error {
 		cmd.Dir = dir
 	}
 	cmd.Env = append(os.Environ(), "GIO_LAUNCHED_DESKTOP_FILE="+a.Path)
+	if activationToken != "" {
+		cmd.Env = append(cmd.Env, "XDG_ACTIVATION_TOKEN="+activationToken)
+	}
 	return spawn.Detached(cmd, strings.TrimSuffix(a.ID, ".desktop"))
 }
 
@@ -451,8 +540,9 @@ func (a App) spawn(execLine string) error {
 var errNotActivatable = errors.New("desktopentry: desktop id is not a D-Bus name")
 
 // activate calls org.freedesktop.Application on the entry's bus name,
-// the desktop id without .desktop (the D-Bus activation spec).
-func (a App) activate(method string, args []any) error {
+// the desktop id without .desktop (the D-Bus activation spec), handing
+// it the activation token in the platform data.
+func (a App) activate(method string, args []any, activationToken string) error {
 	name, ok := strings.CutSuffix(a.ID, ".desktop")
 	if !ok || !strings.Contains(name, ".") {
 		return errNotActivatable
@@ -465,7 +555,12 @@ func (a App) activate(method string, args []any) error {
 	path := dbus.ObjectPath("/" + strings.ReplaceAll(strings.ReplaceAll(name, ".", "/"), "-", "_"))
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	call := append(args, map[string]dbus.Variant{})
+	platform := map[string]dbus.Variant{}
+	if activationToken != "" {
+		platform["activation-token"] = dbus.MakeVariant(activationToken)
+		platform["desktop-startup-id"] = dbus.MakeVariant(activationToken)
+	}
+	call := append(args, platform)
 	return conn.Object(name, path).CallWithContext(ctx, "org.freedesktop.Application."+method, 0, call...).Err
 }
 

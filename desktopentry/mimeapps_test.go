@@ -174,3 +174,22 @@ func TestSetKeyReplacesOrAddsOneLine(t *testing.T) {
 		t.Errorf("new group: %q", got)
 	}
 }
+
+func TestDefaultFallsBackToAddedAssociationsBeforeDeclarers(t *testing.T) {
+	apps := t.TempDir()
+	writeApp(t, apps, "declarer.desktop", "image/png;")
+	writeApp(t, apps, "added.desktop", "")
+	writeApp(t, apps, "removed.desktop", "image/png;")
+	user, system := filepath.Join(t.TempDir(), "mimeapps.list"), filepath.Join(t.TempDir(), "mimeapps.list")
+	_ = os.WriteFile(user, []byte("[Default Applications]\nimage/png=gone.desktop;\n[Removed Associations]\nimage/png=removed.desktop;\n"), 0o600)
+	_ = os.WriteFile(system, []byte("[Added Associations]\nimage/png=removed.desktop;added.desktop;\n"), 0o600)
+	if got, ok := Default([]string{apps}, []string{user, system}, "image/png"); !ok || got.ID != "added.desktop" {
+		t.Errorf("default = %q %v, want the installed added association, the removed one skipped", got.ID, ok)
+	}
+	if got, ok := Default([]string{apps}, []string{user}, "image/png"); !ok || got.ID != "declarer.desktop" {
+		t.Errorf("default without an added association = %q %v, want the declaring app", got.ID, ok)
+	}
+	if got, ok := Default([]string{apps}, []string{user}, "video/mp4"); ok {
+		t.Errorf("an unhandled type = %q, want none", got.ID)
+	}
+}

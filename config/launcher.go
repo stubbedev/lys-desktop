@@ -154,7 +154,7 @@ type LauncherDrunConfig struct {
 	DisplayFormat string `cfg:"display-format"`
 	// Expose desktop-file actions as extra rows.
 	ShowActions bool `cfg:"show-actions"`
-	// Command opening `Type=Link` entries.
+	// Command opening `Type=Link` entries ("" = the built-in opener).
 	URLLauncher string `cfg:"url-launcher,type=Program"`
 }
 
@@ -210,7 +210,7 @@ type LauncherFilebrowserConfig struct {
 	DirectoriesFirst bool `cfg:"directories-first"`
 	// Show hidden files.
 	ShowHidden bool `cfg:"show-hidden"`
-	// Command opening the picked file ("" = xdg-open).
+	// Command opening the picked file ("" = the built-in opener).
 	Command string `cfg:"command,type=Command"`
 }
 
@@ -517,7 +517,6 @@ func DefaultsLauncher() LauncherConfig {
 				DrunFieldName, DrunFieldGeneric, DrunFieldExec, DrunFieldCategories, DrunFieldKeywords,
 			},
 			DisplayFormat: "{name} [<span weight='light' size='small'><i>({generic})</i></span>]",
-			URLLauncher:   "xdg-open",
 		},
 		Run: LauncherRunConfig{
 			RunCommand:   "{cmd}",

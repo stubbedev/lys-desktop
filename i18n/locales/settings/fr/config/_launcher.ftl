@@ -122,7 +122,7 @@ settings-launcher-drun-show-actions = Afficher les actions
     .description = Montrer les actions des fichiers desktop comme lignes supplémentaires
 
 settings-launcher-drun-url-launcher = Lanceur d'URL
-    .description = Commande qui ouvre les entrées de bureau Type=Link
+    .description = Commande qui ouvre les entrées de bureau Type=Link (vide = l'ouvreur intégré)
 
 settings-launcher-run-run-command = Commande d'exécution
     .description = Modèle de validation simple ({"{cmd}"})
@@ -170,7 +170,7 @@ settings-launcher-filebrowser-show-hidden = Afficher les fichiers cachés
     .description = Afficher les fichiers cachés dans la liste
 
 settings-launcher-filebrowser-command = Commande d'ouverture
-    .description = Commande qui ouvre le fichier choisi (vide = xdg-open)
+    .description = Commande qui ouvre le fichier choisi (vide = l'ouvreur intégré)
 
 settings-launcher-combi-modes = Modes combinés
     .description = Modes fusionnés dans la liste combinée

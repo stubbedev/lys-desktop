@@ -111,3 +111,17 @@ func writeConfig(t *testing.T, body string) string {
 	t.Helper()
 	return writeFile(t, t.TempDir(), "config.yaml", body)
 }
+
+func TestLauncherOpenersDefaultToTheBuiltInOpener(t *testing.T) {
+	d := Defaults().Launcher
+	if d.Drun.URLLauncher != "" || d.Filebrowser.Command != "" {
+		t.Errorf("url-launcher %q, filebrowser command %q: want both empty, the built-in opener", d.Drun.URLLauncher, d.Filebrowser.Command)
+	}
+	cfg, err := LoadFile(writeConfig(t, "launcher:\n  drun:\n    url-launcher: firefox\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Launcher.Drun.URLLauncher; got != "firefox" {
+		t.Errorf("a configured url-launcher = %q, want firefox", got)
+	}
+}
