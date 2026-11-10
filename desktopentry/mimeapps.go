@@ -1,16 +1,20 @@
 package desktopentry
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 
 	"github.com/stubbedev/lys-lib/atomicfile"
+	"github.com/stubbedev/lys-lib/xdg"
 )
 
-// The mimeapps.list groups (the XDG mime-apps spec).
+// The mimeapps.list file name and groups (the XDG mime-apps spec).
 const (
+	mimeAppsList = "mimeapps.list"
+
 	groupDefault = "Default Applications"
 	groupAdded   = "Added Associations"
 	groupRemoved = "Removed Associations"
@@ -20,32 +24,19 @@ const (
 func (a App) MimeTypes() []string { return a.file.List(DesktopGroup, "MimeType") }
 
 // MimeAppsLists is the mimeapps.list search order, highest priority
-// first: in $XDG_CONFIG_HOME, each $XDG_CONFIG_DIRS entry, then each
-// applications directory, the current desktops' $desktop-mimeapps.list
-// before the plain mimeapps.list.
+// first: in each directory of the XDG configuration search path
+// ($XDG_CONFIG_HOME, then $XDG_CONFIG_DIRS), then each applications
+// directory, the current desktops' $desktop-mimeapps.list before the
+// plain mimeapps.list.
 func MimeAppsLists() []string {
-	var dirs []string
-	if home := os.Getenv("XDG_CONFIG_HOME"); home != "" {
-		dirs = append(dirs, home)
-	} else if home := os.Getenv("HOME"); home != "" {
-		dirs = append(dirs, filepath.Join(home, ".config"))
-	}
-	cfg := os.Getenv("XDG_CONFIG_DIRS")
-	if cfg == "" {
-		cfg = "/etc/xdg"
-	}
-	for d := range strings.SplitSeq(cfg, ":") {
-		if d != "" {
-			dirs = append(dirs, d)
-		}
-	}
-	dirs = append(dirs, ApplicationDirs()...)
-	var lists []string
+	dirs := append(xdg.OS.ConfigSearchPath(), ApplicationDirs()...)
+	desktops := CurrentDesktops()
+	lists := make([]string, 0, len(dirs)*(len(desktops)+1))
 	for _, d := range dirs {
-		for _, desktop := range CurrentDesktops() {
-			lists = append(lists, filepath.Join(d, strings.ToLower(desktop)+"-mimeapps.list"))
+		for _, desktop := range desktops {
+			lists = append(lists, filepath.Join(d, strings.ToLower(desktop)+"-"+mimeAppsList))
 		}
-		lists = append(lists, filepath.Join(d, "mimeapps.list"))
+		lists = append(lists, filepath.Join(d, mimeAppsList))
 	}
 	return lists
 }
@@ -163,19 +154,14 @@ func SetDefault(id, mimeType string) error { return SetDefaults(id, []string{mim
 // SetDefaults makes id the default for every one of mimeTypes, as
 // SetDefault does for one, in one atomic replacement of the user's
 // mimeapps.list: other groups, keys and comments are kept byte for byte,
-// and a desktop-specific list is read by Default but never written.
+// and a desktop-specific list is read by Default but never written. It
+// is an error when the user has no configuration directory.
 func SetDefaults(id string, mimeTypes []string) error {
-	lists := MimeAppsLists()
-	var path string
-	for _, l := range lists {
-		if filepath.Base(l) == "mimeapps.list" {
-			path = l
-			break
-		}
+	config, ok := xdg.OS.ConfigHome()
+	if !ok {
+		return fmt.Errorf("desktopentry: making %s the default for %s: neither XDG_CONFIG_HOME nor HOME is an absolute path", id, strings.Join(mimeTypes, ", "))
 	}
-	if path == "" {
-		return os.ErrNotExist
-	}
+	path := filepath.Join(config, mimeAppsList)
 	data, err := os.ReadFile(path) //nolint:gosec // the user's own mimeapps.list
 	if err != nil && !os.IsNotExist(err) {
 		return err

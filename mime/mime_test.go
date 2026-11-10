@@ -3,6 +3,7 @@ package mime
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -169,5 +170,24 @@ func TestComment(t *testing.T) {
 	}
 	if got := db.Comment("image/jpeg"); got != "JPEG image" {
 		t.Errorf("a second Comment read the file again: %q", got)
+	}
+}
+
+func TestDataDirsAreTheXDGDataSearchPath(t *testing.T) {
+	for _, c := range []struct {
+		home, dataHome, dataDirs string
+		want                     []string
+	}{
+		{"/home/u", "/data", "/a:/b", []string{"/data", "/a", "/b"}},
+		{"/home/u", "", "", []string{"/home/u/.local/share", "/usr/local/share", "/usr/share"}},
+		{"/home/u", "relative", "/a:relative::/b", []string{"/home/u/.local/share", "/a", "/b"}},
+		{"", "", "relative", []string{"/usr/local/share", "/usr/share"}},
+	} {
+		t.Setenv("HOME", c.home)
+		t.Setenv("XDG_DATA_HOME", c.dataHome)
+		t.Setenv("XDG_DATA_DIRS", c.dataDirs)
+		if got := DataDirs(); !slices.Equal(got, c.want) {
+			t.Errorf("HOME=%q XDG_DATA_HOME=%q XDG_DATA_DIRS=%q: DataDirs = %q, want %q", c.home, c.dataHome, c.dataDirs, got, c.want)
+		}
 	}
 }

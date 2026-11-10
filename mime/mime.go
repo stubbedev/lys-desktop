@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/stubbedev/lys-lib/xdg"
 )
 
 // Unknown is what a name no glob claims guesses as.
@@ -50,34 +52,16 @@ var (
 	system     *Database
 )
 
-// System loads the database from the XDG data directories once:
-// $XDG_DATA_HOME (or ~/.local/share) first, then $XDG_DATA_DIRS (or
-// /usr/local/share:/usr/share). A missing database guesses Unknown for
-// everything.
+// System loads the database from the XDG data directories, DataDirs,
+// once. A missing database guesses Unknown for everything.
 func System() *Database {
 	systemOnce.Do(func() { system = Load(DataDirs()) })
 	return system
 }
 
-// DataDirs is the XDG data directory search order.
-func DataDirs() []string {
-	var dirs []string
-	if home := os.Getenv("XDG_DATA_HOME"); home != "" {
-		dirs = append(dirs, home)
-	} else if home := os.Getenv("HOME"); home != "" {
-		dirs = append(dirs, filepath.Join(home, ".local", "share"))
-	}
-	data := os.Getenv("XDG_DATA_DIRS")
-	if data == "" {
-		data = "/usr/local/share:/usr/share"
-	}
-	for d := range strings.SplitSeq(data, ":") {
-		if d != "" {
-			dirs = append(dirs, d)
-		}
-	}
-	return dirs
-}
+// DataDirs is the XDG data directory search order of the process
+// environment, [xdg.Env.DataSearchPath].
+func DataDirs() []string { return xdg.OS.DataSearchPath() }
 
 // Load reads mime/globs2, generic-icons, aliases and subclasses from
 // each data dir, an earlier directory's entry for the same pattern

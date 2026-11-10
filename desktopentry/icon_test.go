@@ -1,6 +1,7 @@
 package desktopentry
 
 import (
+	"slices"
 	"testing"
 )
 
@@ -35,16 +36,20 @@ func TestIconLookup(t *testing.T) {
 }
 
 func TestDirsFollowXDG(t *testing.T) {
-	t.Setenv("XDG_DATA_HOME", "/data/home")
-	t.Setenv("XDG_DATA_DIRS", "/a:/b")
-	got := ApplicationDirs()
-	want := []string{"/data/home/applications", "/a/applications", "/b/applications"}
-	if len(got) != len(want) {
-		t.Fatalf("dirs = %v, want %v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("dirs[%d] = %q, want %q", i, got[i], want[i])
+	for _, c := range []struct {
+		home, dataHome, dataDirs string
+		want                     []string
+	}{
+		{"/home/u", "/data/home", "/a:/b", []string{"/data/home/applications", "/a/applications", "/b/applications"}},
+		{"/home/u", "", "", []string{"/home/u/.local/share/applications", "/usr/local/share/applications", "/usr/share/applications"}},
+		{"/home/u", "relative", "/a:relative::/b", []string{"/home/u/.local/share/applications", "/a/applications", "/b/applications"}},
+		{"", "", "relative", []string{"/usr/local/share/applications", "/usr/share/applications"}},
+	} {
+		t.Setenv("HOME", c.home)
+		t.Setenv("XDG_DATA_HOME", c.dataHome)
+		t.Setenv("XDG_DATA_DIRS", c.dataDirs)
+		if got := ApplicationDirs(); !slices.Equal(got, c.want) {
+			t.Errorf("HOME=%q XDG_DATA_HOME=%q XDG_DATA_DIRS=%q: ApplicationDirs = %q, want %q", c.home, c.dataHome, c.dataDirs, got, c.want)
 		}
 	}
 }

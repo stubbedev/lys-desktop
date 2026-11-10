@@ -193,3 +193,42 @@ func TestDefaultFallsBackToAddedAssociationsBeforeDeclarers(t *testing.T) {
 		t.Errorf("an unhandled type = %q, want none", got.ID)
 	}
 }
+
+func TestMimeAppsListsIgnoreRelativeConfigDirs(t *testing.T) {
+	t.Setenv("HOME", "/home/u")
+	t.Setenv("XDG_CONFIG_HOME", "relative")
+	t.Setenv("XDG_CONFIG_DIRS", "/a:relative::/b")
+	t.Setenv("XDG_DATA_HOME", "/d")
+	t.Setenv("XDG_DATA_DIRS", "/usr/share")
+	t.Setenv("XDG_CURRENT_DESKTOP", "")
+	want := []string{
+		"/home/u/.config/mimeapps.list", "/a/mimeapps.list", "/b/mimeapps.list",
+		"/d/applications/mimeapps.list", "/usr/share/applications/mimeapps.list",
+	}
+	if got := MimeAppsLists(); !slices.Equal(got, want) {
+		t.Errorf("lists = %q, want %q", got, want)
+	}
+	t.Setenv("XDG_CONFIG_DIRS", "")
+	want = []string{
+		"/home/u/.config/mimeapps.list", "/etc/xdg/mimeapps.list",
+		"/d/applications/mimeapps.list", "/usr/share/applications/mimeapps.list",
+	}
+	if got := MimeAppsLists(); !slices.Equal(got, want) {
+		t.Errorf("lists without XDG_CONFIG_DIRS = %q, want %q", got, want)
+	}
+}
+
+func TestSetDefaultWithoutAConfigHomeWritesNoSystemList(t *testing.T) {
+	system := t.TempDir()
+	t.Setenv("HOME", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("XDG_CONFIG_DIRS", system)
+	t.Setenv("XDG_CURRENT_DESKTOP", "")
+	err := SetDefault("b.desktop", "image/png")
+	if err == nil || !strings.Contains(err.Error(), "b.desktop") || !strings.Contains(err.Error(), "image/png") {
+		t.Errorf("SetDefault without a config home: err = %v, want one naming the app and the type", err)
+	}
+	if entries, _ := os.ReadDir(system); len(entries) != 0 {
+		t.Errorf("the system config dir was written: %v", entries)
+	}
+}

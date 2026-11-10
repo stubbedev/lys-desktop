@@ -13,6 +13,7 @@ import (
 	"time"
 
 	dbus "github.com/stubbedev/lys-lib/third_party/godbus"
+	"github.com/stubbedev/lys-lib/xdg"
 
 	"github.com/stubbedev/lys-desktop/fileuri"
 	"github.com/stubbedev/lys-desktop/shlex"
@@ -46,24 +47,13 @@ type Link struct {
 	Icon string
 }
 
-// ApplicationDirs is the XDG applications search order:
-// $XDG_DATA_HOME/applications (or ~/.local/share/applications), then
-// each $XDG_DATA_DIRS entry (or /usr/local/share:/usr/share).
+// ApplicationDirs is the XDG applications search order: the
+// applications directory of each directory of the XDG data search path
+// ($XDG_DATA_HOME, then $XDG_DATA_DIRS).
 func ApplicationDirs() []string {
-	var dirs []string
-	if home := os.Getenv("XDG_DATA_HOME"); home != "" {
-		dirs = append(dirs, filepath.Join(home, "applications"))
-	} else if home := os.Getenv("HOME"); home != "" {
-		dirs = append(dirs, filepath.Join(home, ".local", "share", "applications"))
-	}
-	data := os.Getenv("XDG_DATA_DIRS")
-	if data == "" {
-		data = "/usr/local/share:/usr/share"
-	}
-	for d := range strings.SplitSeq(data, ":") {
-		if d != "" {
-			dirs = append(dirs, filepath.Join(d, "applications"))
-		}
+	dirs := xdg.OS.DataSearchPath()
+	for i, dir := range dirs {
+		dirs[i] = filepath.Join(dir, "applications")
 	}
 	return dirs
 }
