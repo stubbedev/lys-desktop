@@ -5,13 +5,13 @@ import (
 	"strings"
 	"testing"
 
-	dbus "github.com/stubbedev/lys-lib/third_party/godbus"
+	"github.com/stubbedev/lys-lib/logind"
+	"github.com/stubbedev/lys-lib/logind/logindtest"
 
-	"github.com/stubbedev/lys-desktop/service/logind/logindtest"
 	"github.com/stubbedev/lys-desktop/spawn"
 )
 
-const displaySession = dbus.ObjectPath("/org/freedesktop/login1/session/_32")
+const displaySession logind.SessionID = "2"
 
 // defaultLockCommands are the power menu's and the dashboard's default
 // Lock commands.
@@ -29,13 +29,17 @@ func TestDefaultLockCommandsLockTheDisplaySession(t *testing.T) {
 	for _, c := range defaultLockCommands() {
 		command := c.command
 		t.Run(c.name, func(t *testing.T) {
-			fake := logindtest.StartUnit(t, displaySession)
+			fake := logindtest.StartUnit(t, logindtest.Config{Display: displaySession})
 			out, err := spawn.Owned(t.Context(), command).CombinedOutput()
 			if err != nil {
 				t.Fatalf("%s: %v: %s", command, err, out)
 			}
-			if got := fake.Locked.Load(); !slices.Equal(got, []dbus.ObjectPath{displaySession}) {
-				t.Errorf("%s locked %v, want [%s]", command, got, displaySession)
+			want := logind.SessionPath(displaySession)
+			if got := fake.CallsTo("Session.Lock"); len(got) != 1 || got[0].Path != want {
+				t.Errorf("%s: Session.Lock calls %v, want one on %s", command, got, want)
+			}
+			if got := fake.Events.Load(); !slices.Equal(got, []logindtest.Event{logindtest.EventLock}) {
+				t.Errorf("%s: logind events %v, want one lock", command, got)
 			}
 		})
 	}
@@ -47,13 +51,13 @@ func TestDefaultLockCommandsWithoutASessionFail(t *testing.T) {
 	for _, c := range defaultLockCommands() {
 		command := c.command
 		t.Run(c.name, func(t *testing.T) {
-			fake := logindtest.StartUnit(t, "")
+			fake := logindtest.StartUnit(t, logindtest.Config{})
 			out, err := spawn.Owned(t.Context(), command).CombinedOutput()
 			if err == nil || !strings.HasPrefix(string(out), "Failed to issue method call: ") {
 				t.Errorf("%s: err %v output %q, want loginctl's failed Lock call", command, err, out)
 			}
-			if got := fake.Locked.Load(); len(got) != 0 {
-				t.Errorf("%s locked %v with no session", command, got)
+			if got := fake.Events.Load(); len(got) != 0 {
+				t.Errorf("%s: logind events %v with no session", command, got)
 			}
 		})
 	}

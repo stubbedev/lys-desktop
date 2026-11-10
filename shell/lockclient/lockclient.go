@@ -20,12 +20,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/stubbedev/lys-lib/logind"
 	dbus "github.com/stubbedev/lys-lib/third_party/godbus"
 	"github.com/stubbedev/lys-lib/xdg"
 
 	"github.com/stubbedev/lys-desktop/config"
 	"github.com/stubbedev/lys-desktop/identity"
-	"github.com/stubbedev/lys-desktop/service/logind"
 	"github.com/stubbedev/lys-desktop/spawn"
 )
 
@@ -212,13 +212,13 @@ func (c *Client) mayRespawn() bool {
 // returns at once with the client, for `lys-shell lock`, and the stop that
 // ends the logind listener.
 func Start(system *dbus.Conn, current func() *config.Config, onLocked, onUnlocked func()) (*Client, func()) {
-	var session atomic.Pointer[logind.Client]
+	var session atomic.Pointer[logind.Session]
 	c := New(func() bool { return current().Login.Lock.Enabled }, onLocked, func() (bool, error) {
-		ld := session.Load()
-		if ld == nil {
+		s := session.Load()
+		if s == nil {
 			return false, errNoLogind
 		}
-		return hint(ld)
+		return s.LockedHint(context.Background())
 	})
 	c.onUnlocked = onUnlocked
 	life, stop := context.WithCancel(context.Background())
@@ -230,31 +230,37 @@ func Start(system *dbus.Conn, current func() *config.Config, onLocked, onUnlocke
 			log.Print("lock: logind unavailable: no system bus")
 			return
 		}
-		connecting, connected := context.WithTimeout(life, logind.CallTimeout)
-		ld, err := logind.NewClient(connecting, system)
-		connected()
+		s, err := logind.NewManager(system).GetSession(life, logind.AutoSession)
 		if err != nil {
 			log.Printf("lock: logind unavailable: %v", err)
 			return
 		}
-		session.Store(ld)
+		session.Store(&s)
 		go func() {
-			if shouldRelock(hint(ld)) {
+			if shouldRelock(s.LockedHint(life)) {
 				log.Printf("lock: session was locked at startup (logind LockedHint); re-acquiring")
 				c.Lock()
 			}
 		}()
-		if err := ld.Listen(life, c.Lock, func() {}); err != nil {
+		w, err := s.Watch(life, func(e logind.Event, err error) {
+			if err != nil {
+				log.Printf("lock: %v", err)
+				return
+			}
+			if _, ok := e.(logind.Locked); ok {
+				c.Lock()
+			}
+		})
+		if err != nil {
 			log.Printf("lock: logind listener unavailable; its triggers are off: %v", err)
+			return
+		}
+		<-w.Done()
+		if err := w.Stop(); err != nil {
+			log.Printf("lock: logind listener ended; its triggers are off: %v", err)
 		}
 	}()
 	return c, stop
-}
-
-func hint(ld *logind.Client) (bool, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), logind.CallTimeout)
-	defer cancel()
-	return ld.LockedHint(ctx)
 }
 
 // shouldRelock decides from the LockedHint probe whether a fresh shell

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/stubbedev/lys-lib/dbustest"
+	"github.com/stubbedev/lys-lib/logind/logindtest"
 	dbus "github.com/stubbedev/lys-lib/third_party/godbus"
 	"github.com/stubbedev/lys-lib/xdg"
 
@@ -59,25 +60,27 @@ func newRig(t *testing.T, enabled bool, plan ...string) *rig {
 		return r.hint, nil
 	})
 	r.c.program = os.Args[0]
-	r.c.start = func(cmd *exec.Cmd) (io.Reader, error) {
-		r.mu.Lock()
-		if len(r.plan) == 0 {
-			r.mu.Unlock()
-			return nil, errors.New("no more planned lock processes")
-		}
-		mode := r.plan[0]
-		r.plan = r.plan[1:]
-		r.mu.Unlock()
-		r.starts.Add(1)
-		cmd.Args = []string{os.Args[0], "-test.run=^$"}
-		cmd.Env = append(os.Environ(), "FAKE_LOCK="+mode)
-		out, err := cmd.StdoutPipe()
-		if err != nil {
-			return nil, err
-		}
-		return out, cmd.Start()
-	}
+	r.c.start = r.start
 	return r
+}
+
+func (r *rig) start(cmd *exec.Cmd) (io.Reader, error) {
+	r.mu.Lock()
+	if len(r.plan) == 0 {
+		r.mu.Unlock()
+		return nil, errors.New("no more planned lock processes")
+	}
+	mode := r.plan[0]
+	r.plan = r.plan[1:]
+	r.mu.Unlock()
+	r.starts.Add(1)
+	cmd.Args = []string{os.Args[0], "-test.run=^$"}
+	cmd.Env = append(os.Environ(), "FAKE_LOCK="+mode)
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	return out, cmd.Start()
 }
 
 // settle waits until no lock process runs.
@@ -246,4 +249,28 @@ func TestStartReturnsWhileLogindIsSilent(t *testing.T) {
 	if err := system.BusObject().Call("org.freedesktop.DBus.GetId", 0).Err; err != nil {
 		t.Fatalf("the lock client closed the shared connection: %v", err)
 	}
+}
+
+func TestLogindLockSignalStartsTheLock(t *testing.T) {
+	fake := logindtest.Start(t, logindtest.Config{Own: "2"})
+	cfg := config.Defaults()
+	cfg.Login.Lock.Enabled = true
+	cfg.Login.Lock.LockOnStart = false
+	r := &rig{plan: []string{"unlock"}, ended: make(chan error, 16)}
+	c, stop := Start(fake.Bus.Conn(t), func() *config.Config { return cfg }, func() {}, func() {})
+	t.Cleanup(stop)
+	c.mu.Lock()
+	c.program = os.Args[0]
+	c.start = r.start
+	c.mu.Unlock()
+	r.c = c
+	deadline := time.Now().Add(10 * time.Second)
+	for r.starts.Load() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("logind's Lock signal never started the lock process")
+		}
+		fake.Lock(t, "2")
+		time.Sleep(20 * time.Millisecond)
+	}
+	r.settle(t)
 }
