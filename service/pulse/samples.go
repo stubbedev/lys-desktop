@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/stubbedev/lys-desktop/service/pulse/native"
+	"github.com/stubbedev/lys-lib/pulse/native"
 )
 
 // PlaySample plays p through the server's sample cache: the first play of

@@ -5,8 +5,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/stubbedev/lys-desktop/service/pulse/native"
-	"github.com/stubbedev/lys-desktop/service/pulse/pulsetest"
+	"github.com/stubbedev/lys-lib/pulse/native"
+	"github.com/stubbedev/lys-lib/pulse/pulsetest"
 )
 
 func headset() native.CardInfo {

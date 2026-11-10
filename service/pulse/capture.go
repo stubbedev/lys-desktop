@@ -11,8 +11,7 @@ import (
 	"time"
 
 	"github.com/stubbedev/lys-lib/intconv"
-
-	"github.com/stubbedev/lys-desktop/service/pulse/native"
+	"github.com/stubbedev/lys-lib/pulse/native"
 )
 
 // captureRetry spaces out attempts to reopen a capture whose source

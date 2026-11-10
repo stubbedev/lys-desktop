@@ -8,8 +8,7 @@ import (
 	"time"
 
 	"github.com/stubbedev/lys-lib/intconv"
-
-	"github.com/stubbedev/lys-desktop/service/pulse/native"
+	"github.com/stubbedev/lys-lib/pulse/native"
 )
 
 // DeviceType is input (source) or output (sink) (types/device.rs).

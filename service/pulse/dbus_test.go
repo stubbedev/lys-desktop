@@ -7,9 +7,8 @@ import (
 	"testing"
 
 	"github.com/stubbedev/lys-lib/dbustest"
+	"github.com/stubbedev/lys-lib/pulse/native"
 	dbus "github.com/stubbedev/lys-lib/third_party/godbus"
-
-	"github.com/stubbedev/lys-desktop/service/pulse/native"
 )
 
 // daemonFixture exports a daemon for a fixture service on a private

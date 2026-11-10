@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/stubbedev/lys-desktop/service/pulse/native"
+	"github.com/stubbedev/lys-lib/pulse/native"
 )
 
 // clientName is the application.name the Rust backend's context used.
