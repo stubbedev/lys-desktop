@@ -240,3 +240,48 @@ func isDirectoryError(err error) bool {
 	_, ok := errors.AsType[*DirectoryError](err)
 	return ok
 }
+
+func TestSystemIconRootsFollowTheSystemDataDirectories(t *testing.T) {
+	for _, c := range []struct {
+		name, dataDirs string
+		want           []string
+	}{
+		{"unset, the spec's defaults", "", []string{"/usr/local/share/lys-shell/icons", "/usr/share/lys-shell/icons"}},
+		{"the absolute entries, then /usr/share", "/a:relative::/b", []string{"/a/lys-shell/icons", "/b/lys-shell/icons", "/usr/share/lys-shell/icons"}},
+		{"/usr/share named, once", "/usr/share:/a", []string{"/usr/share/lys-shell/icons", "/a/lys-shell/icons"}},
+		{"relative entries alone", "relative", []string{"/usr/local/share/lys-shell/icons", "/usr/share/lys-shell/icons"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			env := func(name string) string {
+				if name == "XDG_DATA_DIRS" {
+					return c.dataDirs
+				}
+				return ""
+			}
+			if got := systemIconRoots(env); !slices.Equal(got, c.want) {
+				t.Errorf("systemIconRoots = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestSystemIconPathsAreTheExistingAbsoluteRoots(t *testing.T) {
+	cwd, data := t.TempDir(), t.TempDir()
+	system := filepath.Join(data, "lys-shell", "icons")
+	for _, dir := range []string{system, filepath.Join(cwd, "relative", "lys-shell", "icons")} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Chdir(cwd)
+	t.Setenv("XDG_DATA_DIRS", "relative:/nonexistent:"+data)
+	got := SystemIconPaths()
+	if len(got) == 0 || got[0] != system {
+		t.Fatalf("SystemIconPaths = %q, want %s first", got, system)
+	}
+	for _, root := range got {
+		if !filepath.IsAbs(root) || !exists(root) {
+			t.Errorf("SystemIconPaths lists %q, which is relative or missing", root)
+		}
+	}
+}

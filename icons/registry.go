@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 
 	"github.com/stubbedev/lys-lib/xdg"
 	"golang.org/x/sys/unix"
@@ -16,7 +15,9 @@ import (
 // This file ports registry.rs minus the GTK IconTheme wiring: the icon
 // directory layout, index.theme, and the system icon paths.
 
-const systemIconsPath = "/usr/share/lys-shell/icons"
+const rootName = "icons"
+
+const systemIconsPath = "/usr/share/" + identity.Name + "/" + rootName
 
 const indexThemeContent = `[Icon Theme]
 Name=lys-shell Icons
@@ -53,7 +54,7 @@ func DefaultPath() (string, error) {
 	if !ok {
 		return "", ErrHomeNotSet
 	}
-	return filepath.Join(dir, "icons"), nil
+	return filepath.Join(dir, rootName), nil
 }
 
 // BasePath is the theme root.
@@ -140,23 +141,23 @@ func (r *Registry) Watch(onChange func()) (stop func(), err error) {
 	}, nil
 }
 
-// SystemIconPaths are the existing <XDG_DATA_DIRS>/lys-shell/icons roots,
-// then /usr/share/lys-shell/icons.
+// SystemIconPaths are the system icon roots that exist: lys-shell/icons
+// in each system data directory ($XDG_DATA_DIRS, or /usr/local/share
+// and /usr/share when it names none), then /usr/share/lys-shell/icons.
 func SystemIconPaths() []string {
-	var out []string
-	for d := range strings.SplitSeq(os.Getenv("XDG_DATA_DIRS"), ":") {
-		if d == "" {
-			continue
-		}
-		p := filepath.Join(d, "lys-shell/icons")
-		if exists(p) {
-			out = append(out, p)
-		}
+	return slices.DeleteFunc(systemIconRoots(xdg.OS), func(root string) bool { return !exists(root) })
+}
+
+func systemIconRoots(env xdg.Env) []string {
+	data := env.DataDirs()
+	roots := make([]string, 0, len(data)+1)
+	for _, dir := range data {
+		roots = append(roots, filepath.Join(dir, identity.Name, rootName))
 	}
-	if exists(systemIconsPath) && !slices.Contains(out, systemIconsPath) {
-		out = append(out, systemIconsPath)
+	if !slices.Contains(roots, systemIconsPath) {
+		roots = append(roots, systemIconsPath)
 	}
-	return out
+	return roots
 }
 
 // exists is Path::exists: any stat failure reads as absent.
