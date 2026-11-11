@@ -14,6 +14,7 @@ import (
 
 	"github.com/stubbedev/lys-lib/dbustest"
 	"github.com/stubbedev/lys-lib/logind/logindtest"
+	"github.com/stubbedev/lys-lib/testhome"
 	dbus "github.com/stubbedev/lys-lib/third_party/godbus"
 	"github.com/stubbedev/lys-lib/xdg"
 
@@ -25,7 +26,7 @@ import (
 func TestMain(m *testing.M) {
 	switch os.Getenv("FAKE_LOCK") {
 	case "":
-		os.Exit(m.Run())
+		testhome.Run(m)
 	case "unlock":
 		fmt.Println(LockedLine)
 		os.Exit(0)
@@ -39,6 +40,8 @@ func TestMain(m *testing.M) {
 	}
 	os.Exit(99)
 }
+
+func TestTheTestsReachNoHostSession(t *testing.T) { testhome.RequireNoHostSession(t) }
 
 type rig struct {
 	c      *Client

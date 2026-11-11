@@ -14,8 +14,7 @@ import (
 
 	"github.com/stubbedev/lys-lib/dbustest"
 	"github.com/stubbedev/lys-lib/sockdir"
-
-	"github.com/stubbedev/lys-desktop/testhome"
+	"github.com/stubbedev/lys-lib/testhome"
 )
 
 // Start runs a private headless sway rendering with pixman, env
