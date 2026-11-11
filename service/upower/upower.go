@@ -9,11 +9,14 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"log"
 	"slices"
 	"time"
 
 	"github.com/stubbedev/lys-lib/dbusx"
 	dbus "github.com/stubbedev/lys-lib/third_party/godbus"
+
+	"github.com/stubbedev/lys-desktop/internal/bussignal"
 )
 
 // DeviceState mirrors UPower's device state enum
@@ -257,8 +260,8 @@ type Source interface {
 	// Read returns the current device snapshot.
 	Read(ctx context.Context) (Device, error)
 	// Subscribe delivers a tick per PropertiesChanged on the device.
-	// The returned stop function unsubscribes; the channel closes on
-	// ctx completion either way.
+	// The returned stop function unsubscribes and returns once it has;
+	// the channel closes then, or on ctx completion.
 	Subscribe(ctx context.Context) (<-chan struct{}, func(), error)
 	// EnableChargeThreshold turns the charge limit on or off
 	// (Device::enable_charge_threshold).
@@ -402,6 +405,10 @@ func propertiesOf(path dbus.ObjectPath) signalFilter {
 	}
 }
 
+// subscribe ticks per signal one of filters accepts, until ctx ends or
+// stop is called. Its signal channel is the connection's every signal,
+// so the descriptors of each one it reads are closed, and those of the
+// signals it never read once it ends; stop returns once it has.
 func (s *System) subscribe(ctx context.Context, filters ...signalFilter) (<-chan struct{}, func(), error) {
 	removeMatches := func(added []signalFilter) {
 		for _, f := range added {
@@ -420,15 +427,26 @@ func (s *System) subscribe(ctx context.Context, filters ...signalFilter) (<-chan
 	ticks := make(chan struct{}, 1)
 	signals := make(chan *dbus.Signal, 16)
 	s.conn.Signal(signals)
+	following, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		defer close(ticks)
+		defer func() {
+			if err := bussignal.Remove(s.conn, signals); err != nil {
+				log.Printf("upower: %v", err)
+			}
+		}()
 		for {
 			select {
-			case <-ctx.Done():
+			case <-following.Done():
 				return
 			case sig, ok := <-signals:
 				if !ok {
 					return
+				}
+				if err := sig.CloseFDs(); err != nil {
+					log.Printf("upower: discard %s from %s: %v", sig.Name, sig.Sender, err)
 				}
 				if !accepted(sig) {
 					continue
@@ -441,8 +459,9 @@ func (s *System) subscribe(ctx context.Context, filters ...signalFilter) (<-chan
 		}
 	}()
 	stop := func() {
+		cancel()
+		<-done
 		removeMatches(filters)
-		s.conn.RemoveSignal(signals)
 	}
 	return ticks, stop, nil
 }

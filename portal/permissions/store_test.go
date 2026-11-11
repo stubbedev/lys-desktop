@@ -12,6 +12,7 @@ import (
 	"github.com/stubbedev/lys-lib/dbustest"
 	dbus "github.com/stubbedev/lys-lib/third_party/godbus"
 
+	"github.com/stubbedev/lys-desktop/internal/fdtest"
 	"github.com/stubbedev/lys-desktop/portal/permissions"
 	"github.com/stubbedev/lys-desktop/portal/permissions/permstoretest"
 )
@@ -21,7 +22,12 @@ import (
 // shortcut store holding one app's shortcuts.
 func storeRig(t *testing.T) (permissions.Store, *dbus.Conn) {
 	t.Helper()
-	bus := dbustest.Start(t)
+	return storeOn(t, dbustest.Start(t))
+}
+
+// storeOn is storeRig on bus.
+func storeOn(t *testing.T, bus *dbustest.Bus) (permissions.Store, *dbus.Conn) {
+	t.Helper()
 	permstoretest.Start(t, bus, t.TempDir())
 	conn := bus.Conn(t)
 	permstoretest.Set(t, conn, permissions.Devices, "camera", map[string][]string{"org.app": {"yes"}, "org.other": {"yes"}}, byte(0))
@@ -136,11 +142,13 @@ func TestRevokeATableAndShortcuts(t *testing.T) {
 	}
 }
 
-// Watch follows the store's edits until stopped.
+// Watch follows the store's edits until stopped, and leaves the
+// connection's match rules as they were.
 func TestWatchFollowsEdits(t *testing.T) {
 	s, conn := storeRig(t)
+	rules := dbustest.MatchRules(t, s.Conn)
 	changed := make(chan struct{}, 8)
-	stop, err := s.Watch(func() { changed <- struct{}{} })
+	w, err := s.Watch(t.Context(), func() { changed <- struct{}{} }, func(err error) { t.Errorf("the watch failed: %v", err) })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +158,12 @@ func TestWatchFollowsEdits(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("no change announced")
 	}
-	stop()
+	if err := w.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if got := dbustest.MatchRules(t, s.Conn); !slices.Equal(got, rules) {
+		t.Errorf("match rules after Stop = %q, want those before the watch, %q", got, rules)
+	}
 	permstoretest.Set(t, conn, permissions.Location, "location", map[string][]string{"org.app": {"NONE", "0"}}, byte(0))
 	if _, err := s.List(context.Background()); err != nil {
 		t.Fatal(err)
@@ -160,6 +173,33 @@ func TestWatchFollowsEdits(t *testing.T) {
 		t.Error("a change announced after stop")
 	default:
 	}
+}
+
+// A Changed from anyone but the store's owner is dropped, with the
+// descriptor it carries closed.
+func TestWatchClosesTheDescriptorsOfAnImpostorsChanged(t *testing.T) {
+	bus := dbustest.Start(t)
+	s, _ := storeOn(t, bus)
+	changed := make(chan struct{}, 8)
+	w, err := s.Watch(t.Context(), func() { changed <- struct{}{} }, func(err error) { t.Errorf("the watch failed: %v", err) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = w.Stop() })
+	pipe := fdtest.New(t)
+	impostor := bus.Conn(t)
+	err = impostor.Emit(permissions.StorePath, permissions.StoreIface+".Changed",
+		string(permissions.Devices), "camera", false, map[string][]string{}, dbus.MakeVariant(pipe.Write))
+	if err != nil {
+		t.Fatal(err)
+	}
+	permstoretest.Set(t, impostor, permissions.Location, "location", map[string][]string{"org.app": {"EXACT", "0"}}, byte(0))
+	select {
+	case <-changed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the store's change behind the impostor's was not announced")
+	}
+	pipe.RequireEveryCopyClosed(t)
 }
 
 func TestParseTable(t *testing.T) {

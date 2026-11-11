@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/stubbedev/lys-lib/dbusx"
 	dbus "github.com/stubbedev/lys-lib/third_party/godbus"
 )
 
@@ -236,31 +237,21 @@ func (s Store) Set(ctx context.Context, app string, table Table, id string, perm
 	return nil
 }
 
-// Watch calls changed on every edit of the permission store, until
-// stop; edits of the shortcut store are not announced.
-func (s Store) Watch(changed func()) (stop func(), err error) {
-	opts := []dbus.MatchOption{dbus.WithMatchInterface(StoreIface), dbus.WithMatchMember("Changed"), dbus.WithMatchObjectPath(StorePath)}
-	if err := s.Conn.AddMatchSignal(opts...); err != nil {
+var storeChanged = dbusx.NewSignal[struct{}](StoreIface, "Changed")
+
+// Watch runs changed, on the watch's goroutine, on every edit of the
+// permission store announced by whoever owns the store's name, across
+// a restart of it, until ctx ends or the watch is stopped; edits of the
+// shortcut store are not announced. failed is told, on the same
+// goroutine, of a descriptor of the store's signals that did not close.
+func (s Store) Watch(ctx context.Context, changed func(), failed func(error)) (*dbusx.Watch, error) {
+	w, err := dbusx.WatchSignals(ctx, s.Conn, dbusx.FromOwner(StoreName), failed,
+		dbusx.On(storeChanged, StorePath, func(struct{}, dbus.Sequence) error {
+			changed()
+			return nil
+		}))
+	if err != nil {
 		return nil, fmt.Errorf("follow the permission store: %w", err)
 	}
-	signals := make(chan *dbus.Signal, 16)
-	s.Conn.Signal(signals)
-	done := make(chan struct{})
-	go func() {
-		for {
-			select {
-			case sig := <-signals:
-				if sig.Path == StorePath && sig.Name == StoreIface+".Changed" {
-					changed()
-				}
-			case <-done:
-				return
-			}
-		}
-	}()
-	return func() {
-		s.Conn.RemoveSignal(signals)
-		close(done)
-		_ = s.Conn.RemoveMatchSignal(opts...)
-	}, nil
+	return w, nil
 }
