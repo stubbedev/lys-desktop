@@ -5,12 +5,13 @@ package swaytest
 import (
 	"errors"
 	"fmt"
-	"io"
+	"io/fs"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -21,8 +22,8 @@ import (
 )
 
 const (
-	logName    = "log"
-	maxLogTail = 64 << 10
+	logName = "log"
+	pidName = "pid"
 )
 
 // Start runs a private headless sway rendering with pixman, env
@@ -57,9 +58,13 @@ func Start(t *testing.T, env ...string) *os.Process {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
 	})
-	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+	w := watchSway(cmd.Process.Pid, "sway started")
+	if err := os.WriteFile(filepath.Join(dir, pidName), []byte(strconv.Itoa(cmd.Process.Pid)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := w.began.Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
 		if time.Now().After(deadline) {
-			t.Fatalf("sway never opened its socket\n%s", swayLog(t, dir))
+			t.Fatalf("sway never opened its Wayland socket in %s\n%s", dir, w.report(dir))
 		}
 		sockets, _ := filepath.Glob(filepath.Join(dir, "wayland-*"))
 		sockets = slices.DeleteFunc(sockets, func(s string) bool { return strings.HasSuffix(s, ".lock") })
@@ -82,55 +87,55 @@ func listening(socket string) bool {
 
 // Msg runs swaymsg with args against the sway Start ran for this test
 // (its IPC socket in XDG_RUNTIME_DIR), failing the test when sway
-// refuses the command, and returns its output.
+// refuses the command, and returns its output. A failure reports sway's
+// process and thread states, the CPU time it got while swaymsg waited,
+// the host's load, a backtrace when eu-stack or gdb is on PATH, and its
+// log.
 func Msg(t *testing.T, args ...string) []byte {
 	t.Helper()
-	dir := os.Getenv("XDG_RUNTIME_DIR")
-	pattern := filepath.Join(dir, "sway-ipc.*.sock")
-	var sockets []string
-	for deadline := time.Now().Add(5 * time.Second); len(sockets) == 0; time.Sleep(20 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatalf("no sway IPC socket matches %s\n%s", pattern, swayLog(t, dir))
-		}
-		sockets, _ = filepath.Glob(pattern)
-	}
-	began := time.Now()
-	out, err := exec.Command("swaymsg", append([]string{"-s", sockets[0]}, args...)...).CombinedOutput() //nolint:gosec // swaymsg from PATH, for a test
+	out, err := msg(os.Getenv("XDG_RUNTIME_DIR"), args...)
 	if err != nil {
-		t.Fatalf("swaymsg %s: %v after %v: %s\n%s", strings.Join(args, " "), err, time.Since(began), out, swayLog(t, dir))
+		t.Fatal(err)
 	}
 	return out
 }
 
-func swayLog(t *testing.T, dir string) string {
-	t.Helper()
-	name := filepath.Join(dir, logName)
-	tail, skipped, err := readTail(name)
+func msg(dir string, args ...string) ([]byte, error) {
+	pid, err := readPID(dir)
 	if err != nil {
-		t.Errorf("read sway's log: %v", err)
-		return ""
+		return nil, err
 	}
-	if skipped > 0 {
-		return fmt.Sprintf("sway's log %s, its first %d bytes left out:\n%s", name, skipped, tail)
+	socket := filepath.Join(dir, fmt.Sprintf("sway-ipc.%d.%d.sock", os.Getuid(), pid))
+	w := watchSway(pid, "the wait for its IPC socket began")
+	for deadline := w.began.Add(5 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		_, err := os.Lstat(socket) //nolint:gosec // a socket in the test's own directory
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("look for sway's IPC socket: %w", err)
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("sway never opened its IPC socket %s\n%s", socket, w.report(dir))
+		}
 	}
-	return fmt.Sprintf("sway's log %s:\n%s", name, tail)
+	w = watchSway(pid, "swaymsg started")
+	out, err := exec.Command("swaymsg", append([]string{"-s", socket}, args...)...).CombinedOutput() //nolint:gosec // swaymsg from PATH, for a test
+	if err != nil {
+		return nil, fmt.Errorf("swaymsg %s: %w after %v: %s\n%s", strings.Join(args, " "), err, time.Since(w.began), out, w.report(dir))
+	}
+	return out, nil
 }
 
-func readTail(name string) (tail []byte, skipped int64, err error) {
-	f, err := os.Open(name) //nolint:gosec // a file in the test's own directory
+func readPID(dir string) (int, error) {
+	name := filepath.Join(dir, pidName)
+	b, err := os.ReadFile(name) //nolint:gosec // a file in the test's own directory
 	if err != nil {
-		return nil, 0, fmt.Errorf("open %s: %w", name, err)
+		return 0, fmt.Errorf("read the pid of the sway swaytest.Start ran: %w", err)
 	}
-	defer f.Close()
-	info, err := f.Stat()
+	pid, err := strconv.Atoi(string(b))
 	if err != nil {
-		return nil, 0, fmt.Errorf("stat %s: %w", name, err)
+		return 0, fmt.Errorf("parse sway's pid in %s: %w", name, err)
 	}
-	skipped = max(info.Size()-maxLogTail, 0)
-	tail = make([]byte, info.Size()-skipped)
-	n, err := f.ReadAt(tail, skipped)
-	if err != nil && !errors.Is(err, io.EOF) {
-		return nil, 0, fmt.Errorf("read %s: %w", name, err)
-	}
-	return tail[:n], skipped, nil
+	return pid, nil
 }
