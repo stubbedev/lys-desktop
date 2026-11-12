@@ -21,4 +21,4 @@ jobs:
       contents: read
       pull-requests: read
       security-events: write
-    uses: stubbedev/lys-ci/.github/workflows/security.yml@493dadd91d1312838dcb75a2d9a6012920a3be88
+    uses: stubbedev/lys-ci/.github/workflows/security.yml@fc87539c0a5bd989cfc802c6112ad31a6daf8db4
