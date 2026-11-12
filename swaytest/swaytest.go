@@ -3,6 +3,9 @@
 package swaytest
 
 import (
+	"errors"
+	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -15,6 +18,11 @@ import (
 	"github.com/stubbedev/lys-lib/dbustest"
 	"github.com/stubbedev/lys-lib/sockdir"
 	"github.com/stubbedev/lys-lib/testhome"
+)
+
+const (
+	logName    = "log"
+	maxLogTail = 64 << 10
 )
 
 // Start runs a private headless sway rendering with pixman, env
@@ -33,12 +41,12 @@ func Start(t *testing.T, env ...string) *os.Process {
 	if err := os.WriteFile(config, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	log, err := os.Create(filepath.Join(dir, "log")) //nolint:gosec // a file in the test's own directory
+	log, err := os.Create(filepath.Join(dir, logName)) //nolint:gosec // a file in the test's own directory
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer log.Close()
-	cmd := exec.Command("sway", "-c", config) //nolint:gosec // sway from PATH, for a test
+	cmd := exec.Command("sway", "-d", "-c", config) //nolint:gosec // sway from PATH, for a test
 	cmd.Stdout, cmd.Stderr = log, log
 	cmd.Env = append(testhome.WithoutSession(os.Environ()), "XDG_RUNTIME_DIR="+dir, "DBUS_SESSION_BUS_ADDRESS="+dbustest.Start(t).Address, "WLR_BACKENDS=headless", "WLR_RENDERER=pixman", "WLR_LIBINPUT_NO_DEVICES=1")
 	cmd.Env = append(cmd.Env, env...)
@@ -51,8 +59,7 @@ func Start(t *testing.T, env ...string) *os.Process {
 	})
 	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
 		if time.Now().After(deadline) {
-			out, _ := os.ReadFile(log.Name())
-			t.Fatalf("sway never opened its socket:\n%s", out)
+			t.Fatalf("sway never opened its socket\n%s", swayLog(t, dir))
 		}
 		sockets, _ := filepath.Glob(filepath.Join(dir, "wayland-*"))
 		sockets = slices.DeleteFunc(sockets, func(s string) bool { return strings.HasSuffix(s, ".lock") })
@@ -78,17 +85,52 @@ func listening(socket string) bool {
 // refuses the command, and returns its output.
 func Msg(t *testing.T, args ...string) []byte {
 	t.Helper()
-	pattern := filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "sway-ipc.*.sock")
+	dir := os.Getenv("XDG_RUNTIME_DIR")
+	pattern := filepath.Join(dir, "sway-ipc.*.sock")
 	var sockets []string
 	for deadline := time.Now().Add(5 * time.Second); len(sockets) == 0; time.Sleep(20 * time.Millisecond) {
 		if time.Now().After(deadline) {
-			t.Fatalf("no sway IPC socket matches %s", pattern)
+			t.Fatalf("no sway IPC socket matches %s\n%s", pattern, swayLog(t, dir))
 		}
 		sockets, _ = filepath.Glob(pattern)
 	}
+	began := time.Now()
 	out, err := exec.Command("swaymsg", append([]string{"-s", sockets[0]}, args...)...).CombinedOutput() //nolint:gosec // swaymsg from PATH, for a test
 	if err != nil {
-		t.Fatalf("swaymsg %s: %v: %s", strings.Join(args, " "), err, out)
+		t.Fatalf("swaymsg %s: %v after %v: %s\n%s", strings.Join(args, " "), err, time.Since(began), out, swayLog(t, dir))
 	}
 	return out
+}
+
+func swayLog(t *testing.T, dir string) string {
+	t.Helper()
+	name := filepath.Join(dir, logName)
+	tail, skipped, err := readTail(name)
+	if err != nil {
+		t.Errorf("read sway's log: %v", err)
+		return ""
+	}
+	if skipped > 0 {
+		return fmt.Sprintf("sway's log %s, its first %d bytes left out:\n%s", name, skipped, tail)
+	}
+	return fmt.Sprintf("sway's log %s:\n%s", name, tail)
+}
+
+func readTail(name string) (tail []byte, skipped int64, err error) {
+	f, err := os.Open(name) //nolint:gosec // a file in the test's own directory
+	if err != nil {
+		return nil, 0, fmt.Errorf("open %s: %w", name, err)
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, 0, fmt.Errorf("stat %s: %w", name, err)
+	}
+	skipped = max(info.Size()-maxLogTail, 0)
+	tail = make([]byte, info.Size()-skipped)
+	n, err := f.ReadAt(tail, skipped)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, 0, fmt.Errorf("read %s: %w", name, err)
+	}
+	return tail[:n], skipped, nil
 }
