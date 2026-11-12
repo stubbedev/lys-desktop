@@ -65,6 +65,53 @@
         "type": "github"
       }
     },
+    "devtools_4": {
+      "inputs": {
+        "flake-parts": [
+          "lys-wm",
+          "lys-ui",
+          "flake-parts"
+        ],
+        "nixpkgs": "nixpkgs_4"
+      },
+      "locked": {
+        "lastModified": 1794483992,
+        "narHash": "sha256-OQJNL8Z4C9vuz4lubwPqN88SYtWh5Hn0UUeG/M1aKzw=",
+        "owner": "stubbedev",
+        "repo": "flakes.nix",
+        "rev": "c16d9554846d05da43083c90014b1921e7ed24b5",
+        "type": "github"
+      },
+      "original": {
+        "owner": "stubbedev",
+        "repo": "flakes.nix",
+        "type": "github"
+      }
+    },
+    "devtools_5": {
+      "inputs": {
+        "flake-parts": [
+          "lys-wm",
+          "lys-ui",
+          "lys-lib",
+          "flake-parts"
+        ],
+        "nixpkgs": "nixpkgs_5"
+      },
+      "locked": {
+        "lastModified": 1794483992,
+        "narHash": "sha256-OQJNL8Z4C9vuz4lubwPqN88SYtWh5Hn0UUeG/M1aKzw=",
+        "owner": "stubbedev",
+        "repo": "flakes.nix",
+        "rev": "c16d9554846d05da43083c90014b1921e7ed24b5",
+        "type": "github"
+      },
+      "original": {
+        "owner": "stubbedev",
+        "repo": "flakes.nix",
+        "type": "github"
+      }
+    },
     "flake-parts": {
       "inputs": {
         "nixpkgs-lib": [
@@ -124,11 +171,11 @@
     },
     "lys-ci_2": {
       "locked": {
-        "lastModified": 1794445580,
-        "narHash": "sha256-T6AhQs87451fFvZ3GqawVb5/W9UnQKCmCxCi1ZzX4mo=",
+        "lastModified": 1794488447,
+        "narHash": "sha256-H+hfJksPd5hq4z8aEf2/JRBfTf6CWUVrPGs9H7bte4Y=",
         "owner": "stubbedev",
         "repo": "lys-ci",
-        "rev": "37c6b2aedb99b0624885591f547d0e580f6f13ad",
+        "rev": "14adb7d9a75c8ce4eb3080019df0450f2e64f1fa",
         "type": "github"
       },
       "original": {
@@ -139,11 +186,11 @@
     },
     "lys-ci_3": {
       "locked": {
-        "lastModified": 1794445580,
-        "narHash": "sha256-T6AhQs87451fFvZ3GqawVb5/W9UnQKCmCxCi1ZzX4mo=",
+        "lastModified": 1794488447,
+        "narHash": "sha256-H+hfJksPd5hq4z8aEf2/JRBfTf6CWUVrPGs9H7bte4Y=",
         "owner": "stubbedev",
         "repo": "lys-ci",
-        "rev": "37c6b2aedb99b0624885591f547d0e580f6f13ad",
+        "rev": "14adb7d9a75c8ce4eb3080019df0450f2e64f1fa",
         "type": "github"
       },
       "original": {
@@ -181,11 +228,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1794498943,
-        "narHash": "sha256-R+YpvS9tNRS8KQ6095MbPEPtRK7J+CkCcADSaIVV4Ac=",
+        "lastModified": 1794511619,
+        "narHash": "sha256-8QUtCICcElrXGnq5xJn6Akr9Jl9u9CjZziyEike7hHw=",
         "owner": "stubbedev",
         "repo": "lys-lib",
-        "rev": "c73de7dd131029255ba43365f3d51b4c692b6bbf",
+        "rev": "c55448108e514b0219ccaca31345b45f9f46860e",
         "type": "github"
       },
       "original": {
@@ -196,6 +243,7 @@
     },
     "lys-lib_2": {
       "inputs": {
+        "devtools": "devtools_5",
         "flake-parts": [
           "lys-wm",
           "lys-ui",
@@ -209,11 +257,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1794473233,
-        "narHash": "sha256-xX6kr5UQWwCWIQbGkQOABAsdEnpoDJt/4DQC1rImyfk=",
+        "lastModified": 1794498943,
+        "narHash": "sha256-R+YpvS9tNRS8KQ6095MbPEPtRK7J+CkCcADSaIVV4Ac=",
         "owner": "stubbedev",
         "repo": "lys-lib",
-        "rev": "7486f28f5c0bd31bf261b85f8c17a37879feded7",
+        "rev": "c73de7dd131029255ba43365f3d51b4c692b6bbf",
         "type": "github"
       },
       "original": {
@@ -224,6 +272,7 @@
     },
     "lys-ui": {
       "inputs": {
+        "devtools": "devtools_4",
         "flake-parts": "flake-parts_2",
         "lys-ci": "lys-ci_3",
         "lys-lib": "lys-lib_2",
@@ -233,11 +282,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1794473364,
-        "narHash": "sha256-oEUHBsIHOsWZh4/QXboNeXgdqui270aY3jd4exR1Dp8=",
+        "lastModified": 1794503936,
+        "narHash": "sha256-yI9PAXLOK13qunT8I+daOQAUli2y7EfDqc/ZslLZwSI=",
         "owner": "stubbedev",
         "repo": "lys-ui",
-        "rev": "d155c9f417e0e7ebf1003f07279231452351625f",
+        "rev": "eb680c206745b98338326dd986304770add78df3",
         "type": "github"
       },
       "original": {
@@ -259,11 +308,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1794501974,
-        "narHash": "sha256-7O1ekcGfW8s3EQ+XqWCxPKdAWfyZ6a+cwvRrrew96TQ=",
+        "lastModified": 1794512465,
+        "narHash": "sha256-0wxbKGO1AE5TPKO3M1DavtDnxnwkFChCYKKwRO3hIIg=",
         "owner": "stubbedev",
         "repo": "lys-wm",
-        "rev": "d915e6202f077e2dd558786b2ebe5ca31ac05960",
+        "rev": "af8378793db288ec65daf481844dcc7063c5a463",
         "type": "github"
       },
       "original": {
@@ -322,6 +371,38 @@
     },
     "nixpkgs_4": {
       "locked": {
+        "lastModified": 1794192123,
+        "narHash": "sha256-SvB8u5qaJAOwZZyZciqTVOg/rBoUs2w0sFTU6ED51AQ=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "177d0540942fb205af6993b1d5fa0b57799e09f8",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs_5": {
+      "locked": {
+        "lastModified": 1794192123,
+        "narHash": "sha256-SvB8u5qaJAOwZZyZciqTVOg/rBoUs2w0sFTU6ED51AQ=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "177d0540942fb205af6993b1d5fa0b57799e09f8",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs_6": {
+      "locked": {
         "lastModified": 1794042290,
         "narHash": "sha256-ziZn2PvCJE5JEEpqTdxXwJpPB+L3YqoCpTAMCzyaP3U=",
         "owner": "NixOS",
@@ -343,7 +424,7 @@
         "lys-ci": "lys-ci",
         "lys-lib": "lys-lib",
         "lys-wm": "lys-wm",
-        "nixpkgs": "nixpkgs_4"
+        "nixpkgs": "nixpkgs_6"
       }
     }
   },
