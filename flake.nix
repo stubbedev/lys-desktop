@@ -8,6 +8,11 @@
       url = "github:hercules-ci/flake-parts";
       inputs.nixpkgs-lib.follows = "nixpkgs";
     };
+    devtools = {
+      url = "github:stubbedev/flakes.nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.flake-parts.follows = "flake-parts";
+    };
     lys-lib = {
       url = "github:stubbedev/lys-lib";
       inputs.nixpkgs.follows = "nixpkgs";

@@ -1,5 +1,6 @@
 {inputs, ...}: {
   perSystem = {
+    inputs',
     lib,
     pkgs,
     ...
@@ -11,7 +12,7 @@
     devShells.default = pkgs.mkShell {
       packages = with pkgs;
         [
-          go_1_27
+          inputs'.devtools.packages.go
           golangci-lint
           gofumpt
           gopls
