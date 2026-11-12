@@ -1,6 +1,6 @@
 module github.com/stubbedev/lys-desktop
 
-go 1.27.3
+go 1.27.4
 
 require (
 	github.com/stubbedev/lys-lib v0.3.22-0.20261112084153-839ad41989a7
