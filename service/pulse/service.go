@@ -273,8 +273,8 @@ func (s *Service) reconnect() *session {
 }
 
 // Close disconnects for good, closes every subscriber channel, and
-// returns once the goroutines of its connection and subscriptions have
-// ended.
+// returns once the goroutines of its connection, subscriptions and
+// captures have ended.
 func (s *Service) Close() error {
 	s.close()
 	<-s.stopped
@@ -415,21 +415,22 @@ func (s *Service) refreshDefaults(ctx context.Context, sess *session) (bool, err
 // closes when ctx ends or the service closes; stop unsubscribes early.
 // stop and Close return once the subscription's goroutine has ended.
 func (s *Service) Subscribe(ctx context.Context) (<-chan struct{}, func(), error) {
-	ch := make(chan struct{}, 1)
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.subscribeLocked(ctx)
+}
+
+func (s *Service) subscribeLocked(ctx context.Context) (<-chan struct{}, func(), error) {
 	if s.life.Err() != nil {
-		s.mu.Unlock()
 		return nil, nil, fmt.Errorf("pulse: subscribe: %w", ErrClosed)
 	}
+	ch := make(chan struct{}, 1)
 	id := s.nextSub
 	s.nextSub++
 	s.subs[id] = ch
-	s.following.Add(1)
-	s.mu.Unlock()
 	quit := make(chan struct{})
 	ended := make(chan struct{})
-	go func() {
-		defer s.following.Done()
+	s.following.Go(func() {
 		defer close(ended)
 		select {
 		case <-ctx.Done():
@@ -437,7 +438,7 @@ func (s *Service) Subscribe(ctx context.Context) (<-chan struct{}, func(), error
 		case <-quit:
 		case <-s.life.Done():
 		}
-	}()
+	})
 	stop := sync.OnceFunc(func() {
 		close(quit)
 		<-ended

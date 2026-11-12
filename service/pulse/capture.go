@@ -125,7 +125,8 @@ type Capture struct {
 // Capture starts recording target. onData receives each chunk on the
 // connection's reader goroutine: it must not block, and it owns the
 // slice. A target that does not resolve yet is not an error; the
-// capture waits for it.
+// capture waits for it. Service.Close ends the capture too, and returns
+// once its goroutine has ended.
 func (s *Service) Capture(target CaptureTarget, spec CaptureSpec, onData func([]byte)) (*Capture, error) {
 	if err := spec.validate(); err != nil {
 		return nil, err
@@ -133,15 +134,17 @@ func (s *Service) Capture(target CaptureTarget, spec CaptureSpec, onData func([]
 	if onData == nil {
 		return nil, errors.New("pulse: capture: nil data handler")
 	}
-	ticks, unsubscribe, err := s.Subscribe(context.Background())
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ticks, unsubscribe, err := s.subscribeLocked(context.Background())
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("pulse: capture %s: %w", target, err)
 	}
 	c := &Capture{
 		s: s, target: target, spec: spec, onData: onData,
 		stop: make(chan struct{}), done: make(chan struct{}),
 	}
-	go c.run(ticks, unsubscribe)
+	s.following.Go(func() { c.run(ticks, unsubscribe) })
 	return c, nil
 }
 
