@@ -70,7 +70,7 @@ func TestSubscribePeripheralsTicksOnDeviceChangesOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer stop()
+	defer requireStopped(t, "the peripherals", stop)
 	expect := func(what string) {
 		t.Helper()
 		select {
@@ -102,12 +102,12 @@ func TestSubscribeTicksWhenUPowerAppears(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer stopDisplay()
+	defer requireStopped(t, "the battery", stopDisplay)
 	peripherals, stopPeripherals, err := sys.SubscribePeripherals(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer stopPeripherals()
+	defer requireStopped(t, "the peripherals", stopPeripherals)
 	upowertest.Serve(t, bus.Conn(t), upowertest.Battery(50, upower.StateDischarging, upower.WarningNone))
 	for name, ticks := range map[string]<-chan struct{}{"battery": display, "peripherals": peripherals} {
 		select {
@@ -126,5 +126,12 @@ func TestKindFromUint32(t *testing.T) {
 		if got := upower.KindFromUint32(raw); got != want {
 			t.Errorf("KindFromUint32(%d) = %v, want %v", raw, got, want)
 		}
+	}
+}
+
+func requireStopped(t *testing.T, what string, stop func() error) {
+	t.Helper()
+	if err := stop(); err != nil {
+		t.Errorf("stop following %s: %v", what, err)
 	}
 }

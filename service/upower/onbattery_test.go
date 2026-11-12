@@ -38,7 +38,11 @@ func TestOnBatteryFollowsUPower(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer stop()
+	defer func() {
+		if err := stop(); err != nil {
+			t.Errorf("stop: %v", err)
+		}
+	}()
 	m.on.Store(true)
 	if err := conn.Emit(managerPath, propertiesInterface+".PropertiesChanged", BusName, map[string]dbus.Variant{"OnBattery": dbus.MakeVariant(true)}, []string{}); err != nil {
 		t.Fatal(err)

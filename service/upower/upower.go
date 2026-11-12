@@ -8,9 +8,11 @@ package upower
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/stubbedev/lys-lib/dbusx"
@@ -262,7 +264,7 @@ type Source interface {
 	// Subscribe delivers a tick per PropertiesChanged on the device.
 	// The returned stop function unsubscribes and returns once it has;
 	// the channel closes then, or on ctx completion.
-	Subscribe(ctx context.Context) (<-chan struct{}, func(), error)
+	Subscribe(ctx context.Context) (<-chan struct{}, func() error, error)
 	// EnableChargeThreshold turns the charge limit on or off
 	// (Device::enable_charge_threshold).
 	EnableChargeThreshold(ctx context.Context, enabled bool) error
@@ -271,7 +273,7 @@ type Source interface {
 	Peripherals(ctx context.Context) ([]Peripheral, error)
 	// SubscribePeripherals delivers a tick per device added or removed
 	// and per PropertiesChanged on any device but the DisplayDevice.
-	SubscribePeripherals(ctx context.Context) (<-chan struct{}, func(), error)
+	SubscribePeripherals(ctx context.Context) (<-chan struct{}, func() error, error)
 }
 
 // System reads the real UPower on the system bus.
@@ -316,7 +318,7 @@ func (s *System) EnableChargeThreshold(ctx context.Context, enabled bool) error 
 // Subscribe matches PropertiesChanged for the DisplayDevice, and UPower
 // gaining an owner, and ticks the channel per signal. The matches are
 // removed by stop.
-func (s *System) Subscribe(ctx context.Context) (<-chan struct{}, func(), error) {
+func (s *System) Subscribe(ctx context.Context) (<-chan struct{}, func() error, error) {
 	return s.subscribe(ctx, propertiesOf(s.path), ownerAppeared)
 }
 
@@ -344,7 +346,7 @@ func (s *System) Peripherals(ctx context.Context) ([]Peripheral, error) {
 // SubscribePeripherals matches DeviceAdded and DeviceRemoved on UPower
 // and PropertiesChanged under its devices, and UPower gaining an owner.
 // The matches are removed by stop.
-func (s *System) SubscribePeripherals(ctx context.Context) (<-chan struct{}, func(), error) {
+func (s *System) SubscribePeripherals(ctx context.Context) (<-chan struct{}, func() error, error) {
 	return s.subscribe(ctx,
 		signalFilter{
 			match: []dbus.MatchOption{dbus.WithMatchObjectPath(managerPath), dbus.WithMatchInterface(BusName)},
@@ -373,7 +375,7 @@ func (s *System) OnBattery(ctx context.Context) (bool, error) {
 
 // SubscribeOnBattery ticks per PropertiesChanged of UPower itself, which
 // carries OnBattery. The match is removed by stop.
-func (s *System) SubscribeOnBattery(ctx context.Context) (<-chan struct{}, func(), error) {
+func (s *System) SubscribeOnBattery(ctx context.Context) (<-chan struct{}, func() error, error) {
 	return s.subscribe(ctx, propertiesOf(managerPath))
 }
 
@@ -409,16 +411,19 @@ func propertiesOf(path dbus.ObjectPath) signalFilter {
 // stop is called. Its signal channel is the connection's every signal,
 // so the descriptors of each one it reads are closed, and those of the
 // signals it never read once it ends; stop returns once it has.
-func (s *System) subscribe(ctx context.Context, filters ...signalFilter) (<-chan struct{}, func(), error) {
-	removeMatches := func(added []signalFilter) {
+func (s *System) subscribe(ctx context.Context, filters ...signalFilter) (<-chan struct{}, func() error, error) {
+	removeMatches := func(added []signalFilter) error {
+		var errs []error
 		for _, f := range added {
-			_ = s.conn.RemoveMatchSignal(f.match...)
+			if err := s.conn.RemoveMatchSignal(f.match...); err != nil {
+				errs = append(errs, fmt.Errorf("upower: remove a signal match: %w", err))
+			}
 		}
+		return errors.Join(errs...)
 	}
 	for i, f := range filters {
 		if err := s.conn.AddMatchSignal(f.match...); err != nil {
-			removeMatches(filters[:i])
-			return nil, nil, fmt.Errorf("upower: match signal: %w", err)
+			return nil, nil, errors.Join(fmt.Errorf("upower: match signal: %w", err), removeMatches(filters[:i]))
 		}
 	}
 	accepted := func(sig *dbus.Signal) bool {
@@ -429,14 +434,11 @@ func (s *System) subscribe(ctx context.Context, filters ...signalFilter) (<-chan
 	s.conn.Signal(signals)
 	following, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
+	var removed error
 	go func() {
 		defer close(done)
 		defer close(ticks)
-		defer func() {
-			if err := bussignal.Remove(s.conn, signals); err != nil {
-				log.Printf("upower: %v", err)
-			}
-		}()
+		defer func() { removed = bussignal.Remove(s.conn, signals) }()
 		for {
 			select {
 			case <-following.Done():
@@ -458,10 +460,10 @@ func (s *System) subscribe(ctx context.Context, filters ...signalFilter) (<-chan
 			}
 		}
 	}()
-	stop := func() {
+	stop := sync.OnceValue(func() error {
 		cancel()
 		<-done
-		removeMatches(filters)
-	}
+		return errors.Join(removed, removeMatches(filters))
+	})
 	return ticks, stop, nil
 }

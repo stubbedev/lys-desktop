@@ -1,6 +1,7 @@
 package upower_test
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -20,8 +21,7 @@ func TestSubscriptionsCloseTheDescriptorsOfEverySignalTheyRead(t *testing.T) {
 	}
 	peripherals, stopPeripherals, err := sys.SubscribePeripherals(t.Context())
 	if err != nil {
-		stopDisplay()
-		t.Fatal(err)
+		t.Fatal(errors.Join(err, stopDisplay()))
 	}
 	pipe := fdtest.New(t)
 	sender := bus.Conn(t)
@@ -39,8 +39,8 @@ func TestSubscriptionsCloseTheDescriptorsOfEverySignalTheyRead(t *testing.T) {
 			t.Fatalf("no tick for %s's PropertiesChanged", what)
 		}
 	}
-	stopDisplay()
-	stopPeripherals()
+	requireStopped(t, "the battery", stopDisplay)
+	requireStopped(t, "the peripherals", stopPeripherals)
 	for what, ticks := range map[string]<-chan struct{}{"battery": display, "peripherals": peripherals} {
 		if _, open := <-ticks; open {
 			t.Errorf("the %s feed is open after stop", what)
