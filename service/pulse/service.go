@@ -69,6 +69,7 @@ type Service struct {
 	defaultSource string
 	subs          map[int]chan struct{}
 	nextSub       int
+	following     sync.WaitGroup
 }
 
 type session struct {
@@ -271,11 +272,14 @@ func (s *Service) reconnect() *session {
 	}
 }
 
-// Close disconnects for good and closes every subscriber channel.
+// Close disconnects for good, closes every subscriber channel, and
+// returns once the goroutines of its connection and subscriptions have
+// ended.
 func (s *Service) Close() error {
 	s.close()
 	<-s.stopped
 	s.closeSubscribers()
+	s.following.Wait()
 	return nil
 }
 
@@ -409,6 +413,7 @@ func (s *Service) refreshDefaults(ctx context.Context, sess *session) (bool, err
 // connection included; ticks coalesce, so a slow reader sees the
 // latest state on its next read rather than a backlog. The channel
 // closes when ctx ends or the service closes; stop unsubscribes early.
+// stop and Close return once the subscription's goroutine has ended.
 func (s *Service) Subscribe(ctx context.Context) (<-chan struct{}, func(), error) {
 	ch := make(chan struct{}, 1)
 	s.mu.Lock()
@@ -419,29 +424,35 @@ func (s *Service) Subscribe(ctx context.Context) (<-chan struct{}, func(), error
 	id := s.nextSub
 	s.nextSub++
 	s.subs[id] = ch
+	s.following.Add(1)
 	s.mu.Unlock()
 	quit := make(chan struct{})
-	var once sync.Once
-	stop := func() {
-		once.Do(func() {
-			close(quit)
-			s.mu.Lock()
-			if c, ok := s.subs[id]; ok {
-				delete(s.subs, id)
-				close(c)
-			}
-			s.mu.Unlock()
-		})
-	}
+	ended := make(chan struct{})
 	go func() {
+		defer s.following.Done()
+		defer close(ended)
 		select {
 		case <-ctx.Done():
-			stop()
+			s.unsubscribe(id)
 		case <-quit:
-		case <-s.stopped:
+		case <-s.life.Done():
 		}
 	}()
+	stop := sync.OnceFunc(func() {
+		close(quit)
+		<-ended
+		s.unsubscribe(id)
+	})
 	return ch, stop, nil
+}
+
+func (s *Service) unsubscribe(id int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if ch, ok := s.subs[id]; ok {
+		delete(s.subs, id)
+		close(ch)
+	}
 }
 
 func (s *Service) notify() {
