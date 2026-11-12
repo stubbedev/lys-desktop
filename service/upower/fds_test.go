@@ -8,7 +8,6 @@ import (
 	"github.com/stubbedev/lys-lib/dbustest"
 	dbus "github.com/stubbedev/lys-lib/third_party/godbus"
 
-	"github.com/stubbedev/lys-desktop/internal/fdtest"
 	"github.com/stubbedev/lys-desktop/service/upower"
 )
 
@@ -23,8 +22,18 @@ func TestSubscriptionsCloseTheDescriptorsOfEverySignalTheyRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(errors.Join(err, stopDisplay()))
 	}
-	pipe := fdtest.New(t)
+	pipe := dbustest.NewPipe(t)
 	sender := bus.Conn(t)
+	if reply, err := sender.RequestName(upower.BusName, dbus.NameFlagDoNotQueue); err != nil || reply != dbus.RequestNameReplyPrimaryOwner {
+		t.Fatalf("own %s: %v %v", upower.BusName, reply, err)
+	}
+	for what, ticks := range map[string]<-chan struct{}{"the DisplayDevice": display, "a peripheral": peripherals} {
+		select {
+		case <-ticks:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("no tick for %s as UPower appeared", what)
+		}
+	}
 	for _, path := range []dbus.ObjectPath{upower.DisplayDevicePath, mousePath} {
 		err := sender.Emit(path, "org.freedesktop.DBus.Properties.PropertiesChanged", "org.freedesktop.UPower.Device",
 			map[string]dbus.Variant{"Handle": dbus.MakeVariant(pipe.Write)}, []string{})

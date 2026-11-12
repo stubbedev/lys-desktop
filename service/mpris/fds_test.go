@@ -7,8 +7,6 @@ import (
 	"github.com/stubbedev/lys-lib/dbustest"
 	"github.com/stubbedev/lys-lib/dbusx"
 	dbus "github.com/stubbedev/lys-lib/third_party/godbus"
-
-	"github.com/stubbedev/lys-desktop/internal/fdtest"
 )
 
 func changedWith(iface string, fd dbus.UnixFD) dbusx.ChangedProperties {
@@ -30,7 +28,7 @@ func TestTheDescriptorsOfEverySignalTheServiceReadsAreClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = svc.Close() })
-	pipe := fdtest.New(t)
+	pipe := dbustest.NewPipe(t)
 
 	stranger := bus.Conn(t)
 	emitChanged(t, stranger, changedWith(PlayerIface, pipe.Write))
@@ -86,8 +84,7 @@ func TestCloseClosesTheDescriptorsOfTheSignalsItNeverRead(t *testing.T) {
 	}
 
 	const markerName = "org.example.Marker"
-	stranger := bus.Conn(t)
-	if reply, err := stranger.RequestName(markerName, dbus.NameFlagDoNotQueue); err != nil || reply != dbus.RequestNameReplyPrimaryOwner {
+	if reply, err := slow.RequestName(markerName, dbus.NameFlagDoNotQueue); err != nil || reply != dbus.RequestNameReplyPrimaryOwner {
 		t.Fatalf("request %s: %v %v", markerName, reply, err)
 	}
 	ticked := make(chan struct{}, 1)
@@ -99,11 +96,11 @@ func TestCloseClosesTheDescriptorsOfTheSignalsItNeverRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pipe := fdtest.New(t)
+	pipe := dbustest.NewPipe(t)
 	for range 8 {
-		emitChanged(t, stranger, changedWith(PlayerIface, pipe.Write))
+		emitChanged(t, slow, changedWith(PlayerIface, pipe.Write))
 	}
-	if err := markerTick.Emit(stranger, "/", struct{}{}); err != nil {
+	if err := markerTick.Emit(slow, "/", struct{}{}); err != nil {
 		t.Fatal(err)
 	}
 	select {

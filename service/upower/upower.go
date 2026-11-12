@@ -8,17 +8,13 @@ package upower
 import (
 	"cmp"
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"slices"
-	"sync"
 	"time"
 
 	"github.com/stubbedev/lys-lib/dbusx"
 	dbus "github.com/stubbedev/lys-lib/third_party/godbus"
-
-	"github.com/stubbedev/lys-desktop/internal/bussignal"
 )
 
 // DeviceState mirrors UPower's device state enum
@@ -252,8 +248,16 @@ const (
 	// BusName is UPower's well-known name on the system bus.
 	BusName             = "org.freedesktop.UPower"
 	deviceInterface     = "org.freedesktop.UPower.Device"
-	propertiesInterface = "org.freedesktop.DBus.Properties"
-	propertiesChanged   = propertiesInterface + ".PropertiesChanged"
+	propertiesInterface = dbusx.PropertiesInterface
+)
+
+type deviceChange struct {
+	Device dbus.ObjectPath `dbus:"device"`
+}
+
+var (
+	deviceAdded   = dbusx.NewSignal[deviceChange](BusName, "DeviceAdded")
+	deviceRemoved = dbusx.NewSignal[deviceChange](BusName, "DeviceRemoved")
 )
 
 // Source is the seam the bar module and dropdown consume; tests swap
@@ -315,11 +319,12 @@ func (s *System) EnableChargeThreshold(ctx context.Context, enabled bool) error 
 	return nil
 }
 
-// Subscribe matches PropertiesChanged for the DisplayDevice, and UPower
-// gaining an owner, and ticks the channel per signal. The matches are
-// removed by stop.
+// Subscribe ticks per PropertiesChanged UPower sends for the
+// DisplayDevice, and per UPower gaining an owner, until stop.
 func (s *System) Subscribe(ctx context.Context) (<-chan struct{}, func() error, error) {
-	return s.subscribe(ctx, propertiesOf(s.path), ownerAppeared)
+	return s.subscribe(ctx, func(t ticker) []dbusx.Route {
+		return []dbusx.Route{onTick(dbusx.PropertiesChanged, s.path, t), appeared(t)}
+	})
 }
 
 // Peripherals enumerates UPower's devices and reads each one, keeping
@@ -343,24 +348,22 @@ func (s *System) Peripherals(ctx context.Context) ([]Peripheral, error) {
 	return out, nil
 }
 
-// SubscribePeripherals matches DeviceAdded and DeviceRemoved on UPower
-// and PropertiesChanged under its devices, and UPower gaining an owner.
-// The matches are removed by stop.
+// SubscribePeripherals ticks per device UPower adds or removes, per
+// PropertiesChanged it sends for any device under its devices but the
+// DisplayDevice, and per UPower gaining an owner, until stop.
 func (s *System) SubscribePeripherals(ctx context.Context) (<-chan struct{}, func() error, error) {
-	return s.subscribe(ctx,
-		signalFilter{
-			match: []dbus.MatchOption{dbus.WithMatchObjectPath(managerPath), dbus.WithMatchInterface(BusName)},
-			accept: func(sig *dbus.Signal) bool {
-				return sig.Path == managerPath && (sig.Name == BusName+".DeviceAdded" || sig.Name == BusName+".DeviceRemoved")
-			},
-		},
-		signalFilter{
-			match: []dbus.MatchOption{dbus.WithMatchPathNamespace(devicesPath), dbus.WithMatchInterface(propertiesInterface)},
-			accept: func(sig *dbus.Signal) bool {
-				return sig.Path != DisplayDevicePath && sig.Name == propertiesChanged
-			},
-		},
-		ownerAppeared)
+	return s.subscribe(ctx, func(t ticker) []dbusx.Route {
+		return []dbusx.Route{
+			onTick(deviceAdded, managerPath, t),
+			onTick(deviceRemoved, managerPath, t),
+			dbusx.On(dbusx.PropertiesChanged, DisplayDevicePath, func(dbusx.ChangedProperties, dbus.Sequence) error { return nil }),
+			dbusx.OnUnder(dbusx.PropertiesChanged, devicesPath, func(dbus.ObjectPath, dbusx.ChangedProperties, dbus.Sequence) error {
+				t.tick()
+				return nil
+			}),
+			appeared(t),
+		}
+	})
 }
 
 // OnBattery reads UPower's OnBattery: the machine runs on its battery.
@@ -373,97 +376,62 @@ func (s *System) OnBattery(ctx context.Context) (bool, error) {
 	return on, nil
 }
 
-// SubscribeOnBattery ticks per PropertiesChanged of UPower itself, which
-// carries OnBattery. The match is removed by stop.
+// SubscribeOnBattery ticks per PropertiesChanged UPower sends for
+// itself, which carries OnBattery, until stop.
 func (s *System) SubscribeOnBattery(ctx context.Context) (<-chan struct{}, func() error, error) {
-	return s.subscribe(ctx, propertiesOf(managerPath))
-}
-
-// signalFilter is one match rule on the bus and the check a delivered
-// signal must pass, since the connection hands every subscriber every
-// signal it receives.
-type signalFilter struct {
-	match  []dbus.MatchOption
-	accept func(*dbus.Signal) bool
-}
-
-// ownerAppeared filters UPower starting or restarting, after which
-// everything read before is stale.
-var ownerAppeared = signalFilter{
-	match: dbusx.OwnerMatch(BusName),
-	accept: func(sig *dbus.Signal) bool {
-		_, owner, ok := dbusx.NameOwnerChange(sig, BusName)
-		return ok && owner != ""
-	},
-}
-
-// propertiesOf filters PropertiesChanged on path.
-func propertiesOf(path dbus.ObjectPath) signalFilter {
-	return signalFilter{
-		match: []dbus.MatchOption{dbus.WithMatchObjectPath(path), dbus.WithMatchInterface(propertiesInterface)},
-		accept: func(sig *dbus.Signal) bool {
-			return sig.Path == path && sig.Name == propertiesChanged
-		},
-	}
-}
-
-// subscribe ticks per signal one of filters accepts, until ctx ends or
-// stop is called. Its signal channel is the connection's every signal,
-// so the descriptors of each one it reads are closed, and those of the
-// signals it never read once it ends; stop returns once it has.
-func (s *System) subscribe(ctx context.Context, filters ...signalFilter) (<-chan struct{}, func() error, error) {
-	removeMatches := func(added []signalFilter) error {
-		var errs []error
-		for _, f := range added {
-			if err := s.conn.RemoveMatchSignal(f.match...); err != nil {
-				errs = append(errs, fmt.Errorf("upower: remove a signal match: %w", err))
-			}
-		}
-		return errors.Join(errs...)
-	}
-	for i, f := range filters {
-		if err := s.conn.AddMatchSignal(f.match...); err != nil {
-			return nil, nil, errors.Join(fmt.Errorf("upower: match signal: %w", err), removeMatches(filters[:i]))
-		}
-	}
-	accepted := func(sig *dbus.Signal) bool {
-		return slices.ContainsFunc(filters, func(f signalFilter) bool { return f.accept(sig) })
-	}
-	ticks := make(chan struct{}, 1)
-	signals := make(chan *dbus.Signal, 16)
-	s.conn.Signal(signals)
-	following, cancel := context.WithCancel(ctx)
-	done := make(chan struct{})
-	var removed error
-	go func() {
-		defer close(done)
-		defer close(ticks)
-		defer func() { removed = bussignal.Remove(s.conn, signals) }()
-		for {
-			select {
-			case <-following.Done():
-				return
-			case sig, ok := <-signals:
-				if !ok {
-					return
-				}
-				if err := sig.CloseFDs(); err != nil {
-					log.Printf("upower: discard %s from %s: %v", sig.Name, sig.Sender, err)
-				}
-				if !accepted(sig) {
-					continue
-				}
-				select {
-				case ticks <- struct{}{}:
-				default:
-				}
-			}
-		}
-	}()
-	stop := sync.OnceValue(func() error {
-		cancel()
-		<-done
-		return errors.Join(removed, removeMatches(filters))
+	return s.subscribe(ctx, func(t ticker) []dbusx.Route {
+		return []dbusx.Route{onTick(dbusx.PropertiesChanged, managerPath, t)}
 	})
+}
+
+type ticker chan struct{}
+
+func (t ticker) tick() {
+	select {
+	case t <- struct{}{}:
+	default:
+	}
+}
+
+func onTick[T any](s dbusx.Signal[T], path dbus.ObjectPath, t ticker) dbusx.Route {
+	return dbusx.On(s, path, func(T, dbus.Sequence) error {
+		t.tick()
+		return nil
+	})
+}
+
+func appeared(t ticker) dbusx.Route {
+	return dbusx.OnOwnerChange(BusName, func(_, owner string, _ dbus.Sequence) error {
+		if owner != "" {
+			t.tick()
+		}
+		return nil
+	})
+}
+
+// subscribe watches UPower, whichever connection owns its name, with
+// the routes made for the returned channel. The channel closes once the
+// watch has ended: at stop, which returns then, at ctx's end, or as the
+// connection closes.
+func (s *System) subscribe(ctx context.Context, routes func(ticker) []dbusx.Route) (<-chan struct{}, func() error, error) {
+	ticks := make(ticker, 1)
+	w, err := dbusx.WatchSignals(ctx, s.conn, dbusx.FromOwner(BusName), func(err error) { log.Printf("upower: %v", err) }, routes(ticks)...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("upower: %w", err)
+	}
+	closed := make(chan struct{})
+	go func() {
+		<-w.Done()
+		close(ticks)
+		close(closed)
+	}()
+	stop := func() error {
+		err := w.Stop()
+		<-closed
+		if err != nil {
+			return fmt.Errorf("upower: %w", err)
+		}
+		return nil
+	}
 	return ticks, stop, nil
 }

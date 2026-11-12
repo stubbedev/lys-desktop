@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log"
 	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -21,18 +22,19 @@ import (
 
 	"github.com/stubbedev/lys-desktop/feed"
 	"github.com/stubbedev/lys-desktop/glob"
-	"github.com/stubbedev/lys-desktop/internal/bussignal"
 )
 
 // D-Bus names of the MPRIS2 surface.
 const (
-	BusNamePrefix = "org.mpris.MediaPlayer2."
+	BusNamePrefix = playerNames + "."
 	ObjectPath    = dbus.ObjectPath("/org/mpris/MediaPlayer2")
 	RootIface     = "org.mpris.MediaPlayer2"
 	PlayerIface   = "org.mpris.MediaPlayer2.Player"
 	// noTrack is the MPRIS "no track" object path SetPosition takes when
 	// the player publishes no mpris:trackid (player/mod.rs NULL_PATH).
 	noTrack = dbus.ObjectPath("/org/mpris/MediaPlayer2/TrackList/NoTrack")
+
+	playerNames = "org.mpris.MediaPlayer2"
 )
 
 // ErrNoPlayer reports a control aimed at a bus name the service does
@@ -211,28 +213,21 @@ type Service struct {
 	ignored  []string
 	priority []string
 
+	membership sync.Mutex
+	names      *dbusx.Watch
+
 	mu      sync.Mutex
 	players []Player
-	// owners maps each player's unique connection name to the player
-	// and the routes of its signals, so a PropertiesChanged is heard
-	// only from the connection that owns a tracked player's name.
-	owners map[string]owned
-	active string
-	ticks  *feed.Tick
+	watches map[string]*dbusx.Watch
+	active  string
+	ticks   *feed.Tick
 
 	ctx    context.Context
 	cancel context.CancelFunc
-	done   chan struct{}
 
 	now         func() time.Time
 	requestedAt map[string]time.Time
 	tracks      *feed.Feed[TrackChange]
-}
-
-// owned is a tracked player as its owning connection is known by.
-type owned struct {
-	name   string
-	routes []dbusx.Route
 }
 
 // TrackChange is the active player moving to another track. Requested
@@ -250,155 +245,104 @@ func (p Player) sameTrack(q Player) bool {
 	return p.TrackID == q.TrackID && p.Title == q.Title && p.Artist == q.Artist && p.Album == q.Album
 }
 
-const (
-	messageBus = "org.freedesktop.DBus"
-	busPath    = dbus.ObjectPath("/org/freedesktop/DBus")
-)
+const messageBus = "org.freedesktop.DBus"
 
-type ownerChange struct {
-	Name     string `dbus:"name"`
-	OldOwner string `dbus:"old_owner"`
-	NewOwner string `dbus:"new_owner"`
-}
-
-var nameOwnerChanged = dbusx.NewSignal[ownerChange](messageBus, "NameOwnerChanged")
-
-// New starts the service on conn, which stays the caller's: it matches
-// the player and bus-owner signals, discovers the players already on
-// the bus, and follows them on a goroutine of its own until Close.
-// ignored and priority are the players-ignored and player-priority
-// config lists.
+// New starts the service on conn, which stays the caller's: it watches
+// the bus announce player names changing owner, discovers the players
+// already on the bus, and follows each one's PropertiesChanged until
+// Close. ignored and priority are the players-ignored and
+// player-priority config lists.
 func New(conn *dbus.Conn, ignored, priority []string) (*Service, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Service{
 		conn:        conn,
 		ignored:     ignored,
 		priority:    priority,
-		owners:      make(map[string]owned),
+		watches:     make(map[string]*dbusx.Watch),
 		ticks:       feed.NewTick(),
 		ctx:         ctx,
 		cancel:      cancel,
-		done:        make(chan struct{}),
 		now:         time.Now,
 		requestedAt: make(map[string]time.Time),
 		tracks:      feed.New[TrackChange](4),
 	}
-	if err := conn.AddMatchSignal(playerMatch()...); err != nil {
+	s.membership.Lock()
+	names, err := dbusx.WatchSignals(ctx, conn, dbusx.FromBus(), logFailure,
+		dbusx.OnNameOwnerChanged(s.ownerChanged).WithArg0Namespace(playerNames))
+	if err != nil {
+		s.membership.Unlock()
 		cancel()
-		return nil, fmt.Errorf("mpris: match PropertiesChanged: %w", err)
+		return nil, fmt.Errorf("mpris: watch player names: %w", err)
 	}
-	if err := conn.AddMatchSignal(ownerMatch()...); err != nil {
+	s.names = names
+	err = s.discover()
+	s.membership.Unlock()
+	if err != nil {
 		cancel()
-		return nil, errors.Join(fmt.Errorf("mpris: match NameOwnerChanged: %w", err), conn.RemoveMatchSignal(playerMatch()...))
+		return nil, errors.Join(err, names.Stop())
 	}
-	signals := make(chan *dbus.Signal, 64)
-	conn.Signal(signals)
-	listing, cancelListing := context.WithTimeout(ctx, playerCallTimeout)
-	defer cancelListing()
-	var names []string
-	if err := conn.BusObject().CallWithContext(listing, messageBus+".ListNames", 0).Store(&names); err != nil {
-		cancel()
-		return nil, errors.Join(fmt.Errorf("mpris: list names: %w", err), bussignal.Remove(conn, signals), s.removeMatches())
+	return s, nil
+}
+
+func (s *Service) discover() error {
+	listing, cancel := context.WithTimeout(s.ctx, playerCallTimeout)
+	defer cancel()
+	var listed []string
+	if err := s.conn.BusObject().CallWithContext(listing, messageBus+".ListNames", 0).Store(&listed); err != nil {
+		return fmt.Errorf("mpris: list names: %w", err)
 	}
-	for _, name := range names {
-		if strings.HasPrefix(name, BusNamePrefix) && !Ignored(name, ignored) {
+	for _, name := range listed {
+		if strings.HasPrefix(name, BusNamePrefix) && !Ignored(name, s.ignored) {
 			if err := s.add(name); err != nil {
 				log.Printf("mpris: %v", err)
 			}
 		}
 	}
-	go s.run(signals)
-	return s, nil
+	return nil
 }
 
-// Close stops following the bus and returns once the service's
-// goroutine has ended; the connection stays open.
+func logFailure(err error) { log.Printf("mpris: %v", err) }
+
+// Close stops following the bus and returns once every watch of the
+// service has ended; the connection stays open.
 func (s *Service) Close() error {
 	s.cancel()
-	<-s.done
+	errs := []error{s.names.Stop()}
+	s.mu.Lock()
+	watches := slices.Collect(maps.Values(s.watches))
+	clear(s.watches)
+	s.mu.Unlock()
+	for _, w := range watches {
+		errs = append(errs, w.Stop())
+	}
 	s.ticks.Close()
 	s.tracks.Close()
-	return s.removeMatches()
-}
-
-func (s *Service) removeMatches() error {
-	return errors.Join(s.conn.RemoveMatchSignal(playerMatch()...), s.conn.RemoveMatchSignal(ownerMatch()...))
-}
-
-func playerMatch() []dbus.MatchOption {
-	return []dbus.MatchOption{dbus.WithMatchInterface(dbusx.PropertiesInterface), dbus.WithMatchMember("PropertiesChanged"), dbus.WithMatchObjectPath(ObjectPath)}
-}
-
-func ownerMatch() []dbus.MatchOption {
-	return []dbus.MatchOption{
-		dbus.WithMatchSender(messageBus), dbus.WithMatchObjectPath(busPath), dbus.WithMatchInterface(messageBus),
-		dbus.WithMatchMember("NameOwnerChanged"), dbus.WithMatchArg0Namespace(strings.TrimSuffix(BusNamePrefix, ".")),
-	}
-}
-
-// run consumes the signals until Close, then closes the descriptors of
-// those it was sent and never read.
-func (s *Service) run(signals chan *dbus.Signal) {
-	defer close(s.done)
-	defer func() {
-		if err := bussignal.Remove(s.conn, signals); err != nil {
-			log.Printf("mpris: %v", err)
-		}
-	}()
-	fromBus := []dbusx.Route{dbusx.On(nameOwnerChanged, busPath, s.ownerChanged)}
-	for {
-		select {
-		case <-s.ctx.Done():
-			return
-		case sig, ok := <-signals:
-			if !ok {
-				return
-			}
-			if err := s.handle(sig, fromBus); err != nil {
-				log.Printf("mpris: %v", err)
-			}
-		}
-	}
-}
-
-// handle routes one signal: the bus's announcement that a player's name
-// changed owner (fromBus), or a PropertiesChanged from the connection
-// owning a tracked player's name. The descriptors of every other signal
-// the connection was sent are closed.
-func (s *Service) handle(sig *dbus.Signal, fromBus []dbusx.Route) error {
-	routes := fromBus
-	if sig.Sender != messageBus {
-		s.mu.Lock()
-		routes = s.owners[sig.Sender].routes
-		s.mu.Unlock()
-	}
-	if err := dbusx.Dispatch(sig, sig.Sender, routes); err != nil {
-		return fmt.Errorf("%s from %s: %w", sig.Name, sig.Sender, err)
+	if err := errors.Join(errs...); err != nil {
+		return fmt.Errorf("mpris: close: %w", err)
 	}
 	return nil
 }
 
 // ownerChanged adds, removes, or replaces a player as its bus name
 // changes owner (monitoring.rs spawn_name_monitoring).
-func (s *Service) ownerChanged(change ownerChange, _ dbus.Sequence) error {
+func (s *Service) ownerChanged(change dbusx.OwnerChange, _ dbus.Sequence) error {
 	if !strings.HasPrefix(change.Name, BusNamePrefix) {
 		return nil
 	}
-	if change.OldOwner != "" {
-		s.remove(change.Name)
-	}
+	s.membership.Lock()
+	defer s.membership.Unlock()
 	if change.NewOwner == "" || Ignored(change.Name, s.ignored) {
-		return nil
+		return s.remove(change.Name)
 	}
 	return s.add(change.Name)
 }
 
 // playerRoutes re-read the player name's snapshot on a PropertiesChanged
-// of its root or player interface. Nothing reads the changed values,
-// so the descriptors among them are closed.
-func (s *Service) playerRoutes(name string) []dbusx.Route {
-	refresh := func(c dbusx.ChangedProperties, _ dbus.Sequence) error {
-		return errors.Join(dbus.CloseFDs([]any{c.Changed}), s.refresh(name))
+// of its root or player interface, once ready is closed.
+func (s *Service) playerRoutes(name string, ready <-chan struct{}) []dbusx.Route {
+	refresh := func(dbusx.ChangedProperties, dbus.Sequence) error {
+		<-ready
+		return s.refresh(name)
 	}
 	return []dbusx.Route{
 		dbusx.On(dbusx.PropertiesChanged, ObjectPath, refresh).WithArg0(PlayerIface),
@@ -406,62 +350,71 @@ func (s *Service) playerRoutes(name string) []dbusx.Route {
 	}
 }
 
-// add reads a new player, follows the connection owning its name, and
+// add reads a player, replacing one tracked under its name, and
 // re-selects the active one, as handle_player_added does on every
-// arrival. A player whose owner is not known is not tracked: none of
-// its signals would be heard.
+// arrival. Its PropertiesChanged are watched before it is read and
+// handled only once the read is stored, so none sent after the read
+// began is lost or overtaken by the read. The caller holds membership.
 func (s *Service) add(name string) error {
+	if err := s.remove(name); err != nil {
+		return err
+	}
+	ready := make(chan struct{})
+	w, err := dbusx.WatchSignals(s.ctx, s.conn, dbusx.FromOwner(name), logFailure, s.playerRoutes(name, ready)...)
+	if err != nil {
+		return fmt.Errorf("follow new player %s: %w", name, err)
+	}
 	ctx, cancel := context.WithTimeout(s.ctx, playerCallTimeout)
 	defer cancel()
 	p, err := s.read(ctx, name)
+	if err == nil {
+		s.track(p, w)
+	}
+	close(ready)
 	if err != nil {
-		return fmt.Errorf("read new player: %w", err)
+		return errors.Join(fmt.Errorf("read new player: %w", err), w.Stop())
 	}
-	owner, err := dbusx.NameOwner(ctx, s.conn, name)
-	if err != nil {
-		return fmt.Errorf("follow new player: %w", err)
-	}
-	routes := s.playerRoutes(name)
-	s.mu.Lock()
-	s.dropLocked(name)
-	s.players = append(s.players, p)
-	s.owners[owner] = owned{name: name, routes: routes}
-	if best, ok := SelectBest(s.players, s.priority); ok {
-		s.active = best.BusName
-	}
-	s.mu.Unlock()
 	s.notify()
 	return nil
 }
 
-// remove drops a player; the active one leaving re-selects
-// (handle_player_removed).
-func (s *Service) remove(name string) {
+func (s *Service) track(p Player, w *dbusx.Watch) {
 	s.mu.Lock()
-	dropped := s.dropLocked(name)
-	if dropped && s.active == name {
-		s.active = ""
-		if best, ok := SelectBest(s.players, s.priority); ok {
-			s.active = best.BusName
-		}
-	}
-	s.mu.Unlock()
-	if dropped {
-		s.notify()
+	defer s.mu.Unlock()
+	s.players = append(s.players, p)
+	s.watches[p.BusName] = w
+	if best, ok := SelectBest(s.players, s.priority); ok {
+		s.active = best.BusName
 	}
 }
 
-// dropLocked removes a player and its owner mapping. The caller holds
-// mu.
-func (s *Service) dropLocked(name string) bool {
-	maps.DeleteFunc(s.owners, func(_ string, o owned) bool { return o.name == name })
-	for i, p := range s.players {
-		if p.BusName == name {
-			s.players = append(s.players[:i], s.players[i+1:]...)
-			return true
+// remove drops a player and stops following it; the active one leaving
+// re-selects (handle_player_removed). The caller holds membership.
+func (s *Service) remove(name string) error {
+	s.mu.Lock()
+	w := s.watches[name]
+	delete(s.watches, name)
+	i := slices.IndexFunc(s.players, func(p Player) bool { return p.BusName == name })
+	if i >= 0 {
+		s.players = slices.Delete(s.players, i, i+1)
+		if s.active == name {
+			s.active = ""
+			if best, ok := SelectBest(s.players, s.priority); ok {
+				s.active = best.BusName
+			}
 		}
 	}
-	return false
+	s.mu.Unlock()
+	if i >= 0 {
+		s.notify()
+	}
+	if w == nil {
+		return nil
+	}
+	if err := w.Stop(); err != nil {
+		return fmt.Errorf("stop following %s: %w", name, err)
+	}
+	return nil
 }
 
 // store replaces the player's snapshot, reporting whether that changed

@@ -12,7 +12,6 @@ import (
 	"github.com/stubbedev/lys-lib/dbustest"
 	dbus "github.com/stubbedev/lys-lib/third_party/godbus"
 
-	"github.com/stubbedev/lys-desktop/internal/fdtest"
 	"github.com/stubbedev/lys-desktop/portal/permissions"
 	"github.com/stubbedev/lys-desktop/portal/permissions/permstoretest"
 )
@@ -186,7 +185,7 @@ func TestWatchClosesTheDescriptorsOfAnImpostorsChanged(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = w.Stop() })
-	pipe := fdtest.New(t)
+	pipe := dbustest.NewPipe(t)
 	impostor := bus.Conn(t)
 	err = impostor.Emit(permissions.StorePath, permissions.StoreIface+".Changed",
 		string(permissions.Devices), "camera", false, map[string][]string{}, dbus.MakeVariant(pipe.Write))

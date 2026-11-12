@@ -91,6 +91,18 @@ func TestSubscribePeripheralsTicksOnDeviceChangesOnly(t *testing.T) {
 		t.Error("a DisplayDevice change ticked the peripherals")
 	case <-time.After(200 * time.Millisecond):
 	}
+	stranger := bus.Conn(t)
+	if err := stranger.Emit(mousePath, "org.freedesktop.DBus.Properties.PropertiesChanged", "org.freedesktop.UPower.Device", map[string]dbus.Variant{}, []string{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := stranger.Emit("/org/freedesktop/UPower", upower.BusName+".DeviceAdded", mousePath); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-ticks:
+		t.Error("a peer that is not UPower ticked the peripherals")
+	case <-time.After(200 * time.Millisecond):
+	}
 }
 
 func TestSubscribeTicksWhenUPowerAppears(t *testing.T) {
