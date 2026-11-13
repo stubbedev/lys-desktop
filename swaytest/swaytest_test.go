@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/stubbedev/lys-lib/sockdir"
 )
 
 func TestAMsgToAStoppedSwayReportsItsStateAndCPU(t *testing.T) {
@@ -50,7 +52,7 @@ func TestAMsgToAStoppedSwayReportsItsStateAndCPU(t *testing.T) {
 }
 
 func TestASocketThatAcceptsButNeverRepliesIsNotReady(t *testing.T) {
-	socket := filepath.Join(t.TempDir(), "ipc.sock")
+	socket := filepath.Join(sockdir.Dir(t), "ipc.sock")
 	l, err := net.Listen("unix", socket)
 	if err != nil {
 		t.Fatal(err)
