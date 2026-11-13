@@ -1,11 +1,15 @@
 package swaytest
 
 import (
+	"errors"
+	"net"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 func TestAMsgToAStoppedSwayReportsItsStateAndCPU(t *testing.T) {
@@ -42,5 +46,29 @@ func TestAMsgToAStoppedSwayReportsItsStateAndCPU(t *testing.T) {
 		if thread[1] != "T" {
 			t.Errorf("a thread of the stopped sway is not stopped: %s", strings.TrimSpace(thread[0]))
 		}
+	}
+}
+
+func TestASocketThatAcceptsButNeverRepliesIsNotReady(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "ipc.sock")
+	l, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	if err := answers(socket, time.Now().Add(100*time.Millisecond)); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("a socket nothing serves yet: %v, want the deadline to pass", err)
+	}
+}
+
+func TestAStartedSwayAnswersIPCAtOnce(t *testing.T) {
+	Start(t)
+	dir := os.Getenv("XDG_RUNTIME_DIR")
+	pid, err := readPID(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := answers(ipcSocket(dir, pid), time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("right after Start: %v", err)
 	}
 }

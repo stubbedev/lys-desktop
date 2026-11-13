@@ -3,9 +3,10 @@
 package swaytest
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
-	"io/fs"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -22,14 +23,24 @@ import (
 )
 
 const (
-	logName = "log"
-	pidName = "pid"
+	logName     = "log"
+	pidName     = "pid"
+	startBudget = 30 * time.Second
+)
+
+const (
+	ipcMagic      = "i3-ipc"
+	ipcHeaderSize = len(ipcMagic) + 8
+	ipcGetVersion = 7
 )
 
 // Start runs a private headless sway rendering with pixman, env
 // overriding its environment (WLR_RENDERER=vulkan, a render node), and
-// points WAYLAND_DISPLAY and XDG_RUNTIME_DIR at it for the test. It gets
-// a private session bus: without one, nixpkgs' wrapper runs it under
+// points WAYLAND_DISPLAY and XDG_RUNTIME_DIR at it for the test. It
+// returns once sway has answered an IPC request, so its main loop runs:
+// a listening socket alone is not that, since sway binds its sockets
+// before it loads its config and cursor theme. It gets a private
+// session bus: without one, nixpkgs' wrapper runs it under
 // dbus-run-session, whose process is not sway's. Its log is shown when
 // it fails to start. A host without sway skips the test.
 func Start(t *testing.T, env ...string) *os.Process {
@@ -62,27 +73,58 @@ func Start(t *testing.T, env ...string) *os.Process {
 	if err := os.WriteFile(filepath.Join(dir, pidName), []byte(strconv.Itoa(cmd.Process.Pid)), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for deadline := w.began.Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatalf("sway never opened its Wayland socket in %s\n%s", dir, w.report(dir))
+	socket := ipcSocket(dir, cmd.Process.Pid)
+	for deadline := w.began.Add(startBudget); ; time.Sleep(20 * time.Millisecond) {
+		err := answers(socket, deadline)
+		if err == nil {
+			break
 		}
-		sockets, _ := filepath.Glob(filepath.Join(dir, "wayland-*"))
-		sockets = slices.DeleteFunc(sockets, func(s string) bool { return strings.HasSuffix(s, ".lock") })
-		if len(sockets) > 0 && listening(sockets[0]) {
-			t.Setenv("XDG_RUNTIME_DIR", dir)
-			t.Setenv("WAYLAND_DISPLAY", filepath.Base(sockets[0]))
-			return cmd.Process
+		if time.Now().After(deadline) {
+			t.Fatalf("sway did not answer IPC on %s within %v: %v\n%s", socket, startBudget, err, w.report(dir))
 		}
 	}
+	sockets, err := filepath.Glob(filepath.Join(dir, "wayland-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sockets = slices.DeleteFunc(sockets, func(s string) bool { return strings.HasSuffix(s, ".lock") })
+	if len(sockets) == 0 {
+		t.Fatalf("sway answers IPC but has no Wayland socket in %s\n%s", dir, w.report(dir))
+	}
+	t.Setenv("XDG_RUNTIME_DIR", dir)
+	t.Setenv("WAYLAND_DISPLAY", filepath.Base(sockets[0]))
+	return cmd.Process
 }
 
-func listening(socket string) bool {
+func ipcSocket(dir string, pid int) string {
+	return filepath.Join(dir, fmt.Sprintf("sway-ipc.%d.%d.sock", os.Getuid(), pid))
+}
+
+func answers(socket string, deadline time.Time) (err error) {
 	conn, err := net.Dial("unix", socket)
 	if err != nil {
-		return false
+		return err
 	}
-	_ = conn.Close()
-	return true
+	defer func() { err = errors.Join(err, conn.Close()) }()
+	if err := conn.SetDeadline(deadline); err != nil {
+		return fmt.Errorf("set a deadline on %s: %w", socket, err)
+	}
+	var header [ipcHeaderSize]byte
+	copy(header[:], ipcMagic)
+	binary.NativeEndian.PutUint32(header[len(ipcMagic)+4:], ipcGetVersion)
+	if _, err := conn.Write(header[:]); err != nil {
+		return fmt.Errorf("ask %s for its version: %w", socket, err)
+	}
+	if _, err := io.ReadFull(conn, header[:]); err != nil {
+		return fmt.Errorf("read the reply header from %s: %w", socket, err)
+	}
+	if string(header[:len(ipcMagic)]) != ipcMagic {
+		return fmt.Errorf("%s replied without the %q magic: %q", socket, ipcMagic, header[:len(ipcMagic)])
+	}
+	if _, err := io.CopyN(io.Discard, conn, int64(binary.NativeEndian.Uint32(header[len(ipcMagic):]))); err != nil {
+		return fmt.Errorf("read the reply from %s: %w", socket, err)
+	}
+	return nil
 }
 
 // Msg runs swaymsg with args against the sway Start ran for this test
@@ -105,21 +147,8 @@ func msg(dir string, args ...string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	socket := filepath.Join(dir, fmt.Sprintf("sway-ipc.%d.%d.sock", os.Getuid(), pid))
-	w := watchSway(pid, "the wait for its IPC socket began")
-	for deadline := w.began.Add(5 * time.Second); ; time.Sleep(20 * time.Millisecond) {
-		_, err := os.Lstat(socket) //nolint:gosec // a socket in the test's own directory
-		if err == nil {
-			break
-		}
-		if !errors.Is(err, fs.ErrNotExist) {
-			return nil, fmt.Errorf("look for sway's IPC socket: %w", err)
-		}
-		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("sway never opened its IPC socket %s\n%s", socket, w.report(dir))
-		}
-	}
-	w = watchSway(pid, "swaymsg started")
+	socket := ipcSocket(dir, pid)
+	w := watchSway(pid, "swaymsg started")
 	out, err := exec.Command("swaymsg", append([]string{"-s", socket}, args...)...).CombinedOutput() //nolint:gosec // swaymsg from PATH, for a test
 	if err != nil {
 		return nil, fmt.Errorf("swaymsg %s: %w after %v: %s\n%s", strings.Join(args, " "), err, time.Since(w.began), out, w.report(dir))
